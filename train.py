@@ -179,7 +179,7 @@ class Trainer:
                 "system/model_parameters": sum(p.numel() for p in self.model.parameters()),
                 "system/trainable_parameters": sum(p.numel() for p in self.model.parameters() if p.requires_grad),
                 "system/device": str(self.device)
-            })
+            }, step=0)
             
             self.use_wandb = True
             print(f"W&B logging enabled. Project: {project_name}")
@@ -315,11 +315,12 @@ class Trainer:
             
             # Log training metrics every epoch
             if self.use_wandb:
+                epoch_step = (epoch + 1) * len(self.train_loader)
                 wandb.log({
                     'epoch': epoch,
                     'train/epoch_loss': train_metrics['total_loss'],
                     'train/learning_rate': self.optimizer.param_groups[0]['lr']
-                })
+                }, step=epoch_step)
             
             print(f"Epoch {epoch}/{epochs} - Train Loss: {train_metrics['total_loss']:.6f}")
             
@@ -347,6 +348,7 @@ class Trainer:
                 
                 if self.use_wandb:
                     # Log basic metrics
+                    validation_step = (epoch + 1) * len(self.train_loader)
                     log_dict = {
                         'epoch': epoch,
                         'train/total_loss': train_metrics['total_loss'],
@@ -366,7 +368,7 @@ class Trainer:
                         if k != 'total_loss':
                             log_dict[f'val/{k}'] = v
                     
-                    wandb.log(log_dict)
+                    wandb.log(log_dict, step=validation_step)
                 
                 # Log sample predictions every 20 epochs (more frequent)
                 if self.use_wandb and epoch % 20 == 0:
@@ -433,7 +435,8 @@ class Trainer:
                     caption=f"Prediction - Sample {i+1}"
                 ))
                 
-                wandb.log({f"sample_predictions_epoch_{self.current_epoch}": images})
+                prediction_step = (self.current_epoch + 1) * len(self.train_loader)
+                wandb.log({f"sample_predictions_epoch_{self.current_epoch}": images}, step=prediction_step)
         
         self.model.train()
 

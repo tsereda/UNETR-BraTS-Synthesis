@@ -74,7 +74,7 @@ spec:
             fi
           done
           
-          pip install pyyaml torch tqdm numpy nibabel wandb matplotlib monai[all]
+          pip install "numpy<2.0" pyyaml torch tqdm nibabel wandb matplotlib monai[all]
           pip install --upgrade tensorboard protobuf
           
           python -c "import wandb; print(f'W&B version: {wandb.__version__}')"

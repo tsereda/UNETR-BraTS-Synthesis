@@ -246,7 +246,7 @@ def create_model(config: Dict[str, Any]) -> UNETR_Synthesis:
         hidden_size=model_config.get('hidden_size', 768),
         mlp_dim=model_config.get('mlp_dim', 3072),
         num_heads=model_config.get('num_heads', 12),
-        num_layers=model_config.get('num_layers', 12),
+        #num_layers=model_config.get('num_layers', 12),
         feature_size=model_config.get('feature_size', 16),
         dropout_rate=model_config.get('dropout_rate', 0.1),
         norm_name=model_config.get('norm_name', 'instance'),

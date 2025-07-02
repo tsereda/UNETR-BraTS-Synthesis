@@ -98,6 +98,10 @@ class Trainer:
         weight_decay = training_config.get('weight_decay', 1e-4)
         optimizer_name = training_config.get('optimizer', 'AdamW')
         
+        # Ensure lr and weight_decay are floats
+        lr = float(lr)
+        weight_decay = float(weight_decay)
+        
         # Get parameter groups for transfer learning
         transfer_config = self.config.get('transfer_learning', {})
         if transfer_config.get('enabled', False):

@@ -47,7 +47,7 @@ class UNETR_Synthesis(nn.Module):
         hidden_size: int = 768,
         mlp_dim: int = 3072,
         num_heads: int = 12,
-        num_layers: int = 12,
+        num_layers: int = 12,  # This parameter will be ignored for MONAI UNETR
         feature_size: int = 16,
         dropout_rate: float = 0.1,
         norm_name: str = "instance",
@@ -60,6 +60,7 @@ class UNETR_Synthesis(nn.Module):
         self.out_channels = out_channels
         
         # Core UNETR model from MONAI
+        # Note: MONAI UNETR has fixed 12 transformer layers
         self.unetr = UNETR(
             in_channels=in_channels,
             out_channels=feature_size,  # Use feature_size for intermediate features
@@ -68,7 +69,7 @@ class UNETR_Synthesis(nn.Module):
             hidden_size=hidden_size,
             mlp_dim=mlp_dim,
             num_heads=num_heads,
-            num_layers=num_layers,
+            # num_layers parameter is not supported in MONAI UNETR
             dropout_rate=dropout_rate,
             norm_name=norm_name,
         )

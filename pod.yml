@@ -66,14 +66,15 @@ spec:
             zip_file="/data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset}.zip"
             if [ -f "$zip_file" ]; then
               echo "Extracting ${dataset}..."
-              cd /data && 7z x "$zip_file" -y
+              cd /data
+              sudo 7z x "$zip_file" -o"/tmp/extract_${dataset}" && mv "/tmp/extract_${dataset}/"* "/data/"
               sudo chown -R jovyan:jovyan "/data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset}"
               cd ${REPO_PATH}
               ln -sf "/data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset}" .
             fi
           done
           
-          pip install pyyaml torch tqdm numpy nibabel wandb matplotlib
+          pip install pyyaml torch tqdm numpy nibabel wandb matplotlib monai
           
           python -c "import wandb; print(f'W&B version: {wandb.__version__}')"
           

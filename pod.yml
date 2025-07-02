@@ -53,9 +53,9 @@ spec:
       args:
         - |
 
-          pip install synapseclient
-          synapse config
-          synapse get -r syn51514105 
+          # pip install synapseclient
+          # synapse config
+          # synapse get -r syn51514105 
 
           git clone https://github.com/tsereda/UNETR-BraTS-Synthesis.git ${REPO_PATH}
           cd ${REPO_PATH}
@@ -73,7 +73,7 @@ spec:
             fi
           done
           
-          pip install pyyaml torch tqdm numpy nibabel wandb matplotlib medpy
+          pip install pyyaml torch tqdm numpy nibabel wandb matplotlib
           
           python -c "import wandb; print(f'W&B version: {wandb.__version__}')"
           

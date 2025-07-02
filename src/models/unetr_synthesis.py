@@ -47,7 +47,7 @@ class UNETR_Synthesis(nn.Module):
         hidden_size: int = 768,
         mlp_dim: int = 3072,
         num_heads: int = 12,
-        num_layers: int = 12,  # This parameter will be ignored for MONAI UNETR
+        #num_layers: int = 12
         feature_size: int = 16,
         dropout_rate: float = 0.1,
         norm_name: str = "instance",

@@ -37,6 +37,8 @@ loss:
   ssim_weight: 0.2
   perceptual_weight: 0.1
   l1_weight: 0.1
+  spatial_dims: 3
+  data_range: 2.0
   
 transfer_learning:
   enabled: false

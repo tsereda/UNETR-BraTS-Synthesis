@@ -47,7 +47,6 @@ class CombinedSynthesisLoss(nn.Module):
             spatial_dims=spatial_dims,
             data_range=data_range,
             win_size=11,
-            win_sigma=1.5,
             k1=0.01,
             k2=0.03,
         )

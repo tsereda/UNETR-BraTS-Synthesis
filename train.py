@@ -157,13 +157,32 @@ class Trainer:
         logging_config = self.config.get('logging', {})
         
         if logging_config.get('use_wandb', False):
-            wandb.init(
-                project=logging_config.get('project_name', 'unetr-brats-synthesis'),
-                name=self.exp_name,
-                config=self.config,
-                tags=logging_config.get('tags', [])
-            )
+            # Use environment variables if available, otherwise fall back to config
+            project_name = os.getenv('WANDB_PROJECT', logging_config.get('project_name', 'unetr-brats-synthesis'))
+            entity_name = os.getenv('WANDB_ENTITY', None)
+            
+            wandb_config = {
+                'project': project_name,
+                'name': self.exp_name,
+                'config': self.config,
+                'tags': logging_config.get('tags', [])
+            }
+            
+            if entity_name:
+                wandb_config['entity'] = entity_name
+            
+            wandb.init(**wandb_config)
+            
+            # Log additional system info
+            wandb.log({
+                "system/gpu_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
+                "system/model_parameters": sum(p.numel() for p in self.model.parameters()),
+                "system/trainable_parameters": sum(p.numel() for p in self.model.parameters() if p.requires_grad),
+                "system/device": str(self.device)
+            })
+            
             self.use_wandb = True
+            print(f"W&B logging enabled. Project: {project_name}")
         else:
             self.use_wandb = False
     
@@ -307,13 +326,29 @@ class Trainer:
                 print(f"  Val Loss: {val_loss:.6f} (Best: {self.best_val_loss:.6f})")
                 
                 if self.use_wandb:
-                    wandb.log({
+                    # Log basic metrics
+                    log_dict = {
                         'epoch': epoch,
-                        'train_loss': train_metrics['total_loss'],
-                        'val_loss': val_loss,
-                        **{f'train_{k}': v for k, v in train_metrics.items() if k != 'total_loss'},
-                        **{f'val_{k}': v for k, v in val_metrics.items() if k != 'total_loss'}
-                    })
+                        'train/total_loss': train_metrics['total_loss'],
+                        'val/total_loss': val_loss,
+                        'val/best_loss': self.best_val_loss,
+                        'learning_rate': self.optimizer.param_groups[0]['lr']
+                    }
+                    
+                    # Log detailed loss components
+                    for k, v in train_metrics.items():
+                        if k != 'total_loss':
+                            log_dict[f'train/{k}'] = v
+                    
+                    for k, v in val_metrics.items():
+                        if k != 'total_loss':
+                            log_dict[f'val/{k}'] = v
+                    
+                    wandb.log(log_dict)
+                
+                # Log sample predictions every 50 epochs
+                if self.use_wandb and epoch % 50 == 0:
+                    self.log_sample_predictions()
                 
                 # Early stopping
                 if patience_counter >= early_stopping_patience:
@@ -331,8 +366,56 @@ class Trainer:
         
         if self.use_wandb:
             wandb.finish()
+    
+    def log_sample_predictions(self, num_samples: int = 2):
+        """Log sample predictions to W&B for visualization."""
+        if not self.use_wandb:
+            return
+        
+        self.model.eval()
+        with torch.no_grad():
+            for i, batch in enumerate(self.val_loader):
+                if i >= num_samples:
+                    break
+                
+                inputs = batch['input'].to(self.device)
+                targets = batch['target'].to(self.device)
+                outputs = self.model(inputs)
+                
+                # Take the first sample from the batch
+                input_sample = inputs[0].cpu().numpy()
+                target_sample = targets[0].cpu().numpy()
+                output_sample = outputs[0].cpu().numpy()
+                
+                # Log each modality and the prediction
+                images = []
+                
+                # Log input modalities (middle slice)
+                modality_names = self.config.get('data', {}).get('modalities', ['t1n', 't1c', 't2w', 't2f'])
+                mid_slice = input_sample.shape[-1] // 2
+                
+                for mod_idx, mod_name in enumerate(modality_names):
+                    if mod_idx < input_sample.shape[0]:
+                        images.append(wandb.Image(
+                            input_sample[mod_idx, :, :, mid_slice],
+                            caption=f"Input {mod_name} - Sample {i+1}"
+                        ))
+                
+                # Log target and prediction
+                images.append(wandb.Image(
+                    target_sample[0, :, :, mid_slice],
+                    caption=f"Target - Sample {i+1}"
+                ))
+                images.append(wandb.Image(
+                    output_sample[0, :, :, mid_slice],
+                    caption=f"Prediction - Sample {i+1}"
+                ))
+                
+                wandb.log({f"sample_predictions_epoch_{self.current_epoch}": images})
+        
+        self.model.train()
 
-
+    # ...existing code...
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from YAML file."""
     with open(config_path, 'r') as f:

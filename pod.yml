@@ -1,0 +1,124 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: unetr-brats-pod
+  labels:
+    app: unetr-brats
+spec:
+  nodeSelector:
+    topology.kubernetes.io/region: us-west
+    nautilus.io/linstor: "true"
+  
+  containers:
+    - name: brats-processing
+      image: gitlab-registry.nrp-nautilus.io/prp/jupyter-stack/prp
+      
+      env:
+        - name: REPO_PATH
+          value: /app/UNETR-BraTS-Synthesis
+        - name: PYTHONPATH
+          value: /app/UNETR-BraTS-Synthesis
+        - name: CUDA_VISIBLE_DEVICES
+          value: "0,1"
+        # nnUNet paths
+        - name: nnUNet_raw
+          value: /app/nnunet/raw
+        - name: nnUNet_preprocessed
+          value: /app/nnunet/preprocessed
+        - name: nnUNet_results
+          value: /app/nnunet/results
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: PYTHONIOENCODING
+          value: "UTF-8"
+        # W&B configuration
+        - name: WANDB_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: wandb-credentials
+              key: api-key  # Adjust this key name to match your secret
+        - name: WANDB_PROJECT
+          value: "UNETR-BraTS-Synthesis"
+        - name: WANDB_ENTITY
+          value: "timgsereda"  # Replace with your W&B username/team
+        - name: WANDB_MODE
+          value: "online"  # Change to "offline" if needed
+        - name: SYNAPSE_AUTHTOKEN
+          valueFrom:
+            secretKeyRef:
+              name: synapse-credentials
+              key: authtoken
+      
+      command: ["/bin/bash", "-c"]
+      args:
+        - |
+
+          pip install synapseclient
+          synapse config
+          synapse get -r syn51514105 
+
+          git clone https://github.com/tsereda/UNETR-BraTS-Synthesis.git ${REPO_PATH}
+          cd ${REPO_PATH}
+          
+          sudo apt-get update && sudo apt-get install -y p7zip-full wget git
+          
+          for dataset in "TrainingData" "ValidationData"; do
+            zip_file="/data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset}.zip"
+            if [ -f "$zip_file" ]; then
+              echo "Extracting ${dataset}..."
+              cd /data && 7z x "$zip_file" -y
+              sudo chown -R jovyan:jovyan "/data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset}"
+              cd ${REPO_PATH}
+              ln -sf "/data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset}" .
+            fi
+          done
+          
+          pip install pyyaml torch tqdm numpy nibabel wandb matplotlib medpy
+          
+          python -c "import wandb; print(f'W&B version: {wandb.__version__}')"
+          
+          python -c "import torch; print(f'GPUs available: {torch.cuda.device_count()}')"
+          
+          python scripts/validate_data.py --data_root ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData
+
+          python scripts/download_pretrained.py --model brats_segmentation
+
+
+          PYTHONUNBUFFERED=1 python train.py \
+            --data_root ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData \
+            --config configs/unetr_base.yaml \
+            --exp_name brats_synthesis_v1
+          
+          tail -f /dev/null
+      
+      volumeMounts:
+        - name: workspace
+          mountPath: /app
+        - name: data
+          mountPath: /data
+        - name: shm
+          mountPath: /dev/shm
+      
+      resources:
+        requests:
+          memory: 24Gi                # Increased for multi-GPU
+          cpu: "12"                   # Increased for multi-GPU
+          nvidia.com/gpu: "2"         # Request 2 GPUs (adjust as needed)
+        limits:
+          memory: 32Gi
+          cpu: "16"
+          nvidia.com/gpu: "2"
+  
+  volumes:
+    - name: workspace
+      emptyDir:
+        sizeLimit: 50Gi
+    - name: data
+      persistentVolumeClaim:
+        claimName: brats2025-2
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Gi
+  
+  restartPolicy: Never

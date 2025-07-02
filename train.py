@@ -89,7 +89,8 @@ class Trainer:
     
     def _create_loss(self) -> nn.Module:
         """Create loss function."""
-        return create_loss(self.config)
+        loss = create_loss(self.config)
+        return loss.to(self.device)
     
     def _create_optimizer(self) -> torch.optim.Optimizer:
         """Create optimizer."""

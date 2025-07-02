@@ -67,15 +67,26 @@ spec:
             if [ -f "$zip_file" ]; then
               echo "Extracting ${dataset}..."
               cd /data
-              sudo 7z x "$zip_file" -o"/tmp/extract_${dataset}" && mv "/tmp/extract_${dataset}/"* "/data/"
-              sudo chown -R jovyan:jovyan "/data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset}"
+              # Extract directly to /data with proper directory structure
+              sudo 7z x "$zip_file" -o"/data/"
+              # Fix ownership
+              if [ -d "/data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset}" ]; then
+                sudo chown -R jovyan:jovyan "/data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset}"
+                echo "Successfully extracted and set ownership for ${dataset}"
+              else
+                echo "Warning: Expected directory /data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset} not found after extraction"
+                echo "Contents of /data after extraction:"
+                ls -la /data/
+              fi
               cd ${REPO_PATH}
               ln -sf "/data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset}" .
+            else
+              echo "Zip file not found: $zip_file"
             fi
           done
           
           pip install "numpy<2.0" pyyaml torch tqdm nibabel wandb matplotlib monai[all]
-          pip install --upgrade tensorboard protobuf
+          pip install --upgrade tensorboard protobuf typing_extensions
           
           python -c "import wandb; print(f'W&B version: {wandb.__version__}')"
           

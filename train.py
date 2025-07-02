@@ -223,6 +223,16 @@ class Trainer:
             if batch_idx % self.config.get('logging', {}).get('log_frequency', 100) == 0:
                 print(f"Batch {batch_idx}/{len(self.train_loader)}, "
                       f"Loss: {total_loss_batch.item():.6f}")
+                
+                # Log to W&B during training for more frequent updates
+                if self.use_wandb:
+                    global_step = self.current_epoch * len(self.train_loader) + batch_idx
+                    wandb.log({
+                        'batch/train_loss': total_loss_batch.item(),
+                        'batch/epoch': self.current_epoch,
+                        'batch/learning_rate': self.optimizer.param_groups[0]['lr'],
+                        'batch/global_step': global_step
+                    }, step=global_step)
         
         # Average losses
         avg_loss = total_loss / num_batches
@@ -303,6 +313,16 @@ class Trainer:
             # Train
             train_metrics = self.train_epoch()
             
+            # Log training metrics every epoch
+            if self.use_wandb:
+                wandb.log({
+                    'epoch': epoch,
+                    'train/epoch_loss': train_metrics['total_loss'],
+                    'train/learning_rate': self.optimizer.param_groups[0]['lr']
+                })
+            
+            print(f"Epoch {epoch}/{epochs} - Train Loss: {train_metrics['total_loss']:.6f}")
+            
             # Validate
             if epoch % val_frequency == 0:
                 val_metrics = self.validate()
@@ -332,7 +352,9 @@ class Trainer:
                         'train/total_loss': train_metrics['total_loss'],
                         'val/total_loss': val_loss,
                         'val/best_loss': self.best_val_loss,
-                        'learning_rate': self.optimizer.param_groups[0]['lr']
+                        'learning_rate': self.optimizer.param_groups[0]['lr'],
+                        'val/is_best': is_best,
+                        'patience_counter': patience_counter
                     }
                     
                     # Log detailed loss components
@@ -346,8 +368,8 @@ class Trainer:
                     
                     wandb.log(log_dict)
                 
-                # Log sample predictions every 50 epochs
-                if self.use_wandb and epoch % 50 == 0:
+                # Log sample predictions every 20 epochs (more frequent)
+                if self.use_wandb and epoch % 20 == 0:
                     self.log_sample_predictions()
                 
                 # Early stopping

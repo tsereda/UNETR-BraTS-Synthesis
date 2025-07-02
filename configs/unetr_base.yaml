@@ -50,7 +50,7 @@ transfer_learning:
     synthesis_head: 1.0
 
 validation:
-  frequency: 10
+  frequency: 1  # Validate every epoch for better monitoring
   metrics: ["mse", "ssim", "psnr", "lpips"]
   save_best: true
   early_stopping_patience: 50

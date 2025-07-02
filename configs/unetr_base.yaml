@@ -50,16 +50,17 @@ transfer_learning:
     synthesis_head: 1.0
 
 validation:
-  frequency: 10
+  frequency: 1  # Validate every epoch for better monitoring
   metrics: ["mse", "ssim", "psnr", "lpips"]
   save_best: true
   early_stopping_patience: 50
 
 logging:
-  use_wandb: false
-  project_name: "unetr-brats-synthesis"
+  use_wandb: true
+  project_name: "UNETR-BraTS-Synthesis"
   log_frequency: 100
   save_frequency: 1000
+  tags: ["brats", "synthesis", "unetr", "base"]
 
 hardware:
   gpus: 1

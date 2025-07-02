@@ -18,7 +18,7 @@ from pathlib import Path
 try:
     from monai.transforms import (
         Compose, LoadImaged, EnsureChannelFirstd, Orientationd, 
-        Spacingd, ScaleIntensityRanged, RandSpatialCropd,
+        Spacingd, ScaleIntensityRanged, RandSpatialCropd, CenterSpatialCropd,
         RandFlipd, RandRotated, RandGaussianNoised,
         RandAdjustContrastd, ToTensord, EnsureTyped
     )
@@ -115,10 +115,12 @@ class BraTSDataset(Dataset):
             ),
         ]
         
+        # Always crop to target volume size to ensure consistent input dimensions
+        transforms.append(CenterSpatialCropd(keys=keys, roi_size=self.volume_size))
+        
         # Add augmentations for training
         if self.phase == 'train':
             transforms.extend([
-                RandSpatialCropd(keys=keys, roi_size=self.volume_size, random_size=False),
                 RandFlipd(keys=keys, prob=0.5, spatial_axis=0),
                 RandFlipd(keys=keys, prob=0.5, spatial_axis=1),
                 RandFlipd(keys=keys, prob=0.5, spatial_axis=2),

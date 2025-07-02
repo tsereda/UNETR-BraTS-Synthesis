@@ -90,6 +90,8 @@ spec:
           
           python -c "import wandb; print(f'W&B version: {wandb.__version__}')"
           
+          python scripts/test_wandb.py
+          
           python -c "import torch; print(f'GPUs available: {torch.cuda.device_count()}')"
           
           python scripts/validate_data.py --data_root ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData
@@ -100,7 +102,8 @@ spec:
           PYTHONUNBUFFERED=1 python train.py \
             --data_root ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData \
             --config configs/unetr_base.yaml \
-            --exp_name brats_synthesis_v1
+            --exp_name brats_synthesis_v1 \
+            --use_wandb
           
           tail -f /dev/null
       

@@ -46,5 +46,5 @@ validation:
 
 logging:
   use_wandb: true
-  project_name: "unetr-brats-synthesis-transfer"
-  tags: ["transfer_learning", "brats_pretrained"]
+  project_name: "UNETR-BraTS-Synthesis"
+  tags: ["transfer_learning", "brats_pretrained", "unetr"]

@@ -231,7 +231,9 @@ class Trainer:
 
                     # Log sample predictions every log_frequency batches
                     log_frequency = self.config.get('logging', {}).get('log_frequency', 25)
+                    print(f"[DEBUG] global_step={self.global_step}, log_frequency={log_frequency}")
                     if self.global_step % log_frequency == 0:
+                        print(f"[DEBUG] Logging sample predictions at global_step {self.global_step}")
                         self.log_sample_predictions()
 
                 # Check for early stopping
@@ -368,18 +370,19 @@ class Trainer:
     def log_sample_predictions(self, num_samples: int = 2):
         """Log sample predictions to W&B for visualization."""
         if not self.use_wandb:
+            print("[DEBUG] Skipping log_sample_predictions: wandb not enabled")
             return
 
         self.model.eval()
         try:
             batch = next(iter(self.val_loader))
         except StopIteration:
+            print("[DEBUG] No batch available in val_loader for sample prediction logging.")
             return
-        
         inputs = batch['input'][:num_samples].to(self.device)
         targets = batch['target'][:num_samples]
         outputs = self.model(inputs).cpu()
-        
+        print(f"[DEBUG] Logging {min(num_samples, inputs.shape[0])} sample predictions to wandb at step {self.global_step}")
         def norm255(x):
             x = x.astype(np.float32)
             x_min, x_max = x.min(), x.max()
@@ -390,24 +393,20 @@ class Trainer:
         images = []
         for i in range(min(num_samples, inputs.shape[0])):
             subject_name = batch.get('subject_name', ['N/A']*num_samples)[i]
-            
             input_slice = inputs[i, 0].cpu().numpy()
             target_slice = targets[i, 0].numpy()
             output_slice = outputs[i, 0].detach().numpy()
-            
             mid_slice = input_slice.shape[-1] // 2
-            
             stacked = np.concatenate([
                 norm255(input_slice[..., mid_slice]),
                 norm255(output_slice[..., mid_slice]),
                 norm255(target_slice[..., mid_slice])
             ], axis=1)
-            
             caption = f"{subject_name} (Input | Prediction | Target)"
             images.append(wandb.Image(stacked, caption=caption))
-        
         # Log using the current global_step without incrementing it
         wandb.log({"sample_predictions": images}, step=self.global_step)
+        print(f"[DEBUG] wandb.log called with {len(images)} images at step {self.global_step}")
         self.model.train()
 
 

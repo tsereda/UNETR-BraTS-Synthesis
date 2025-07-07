@@ -137,21 +137,15 @@ class PerceptualLoss3D(nn.Module):
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """
         Compute perceptual loss.
-        
-        Args:
-            pred: Predicted tensor
-            target: Target tensor
-            
-        Returns:
-            Perceptual loss value
+        Ensures feature extractor is on the same device as input.
         """
+        device = pred.device
+        self.features.to(device)
         pred_features = self._extract_features(pred)
         target_features = self._extract_features(target)
-        
         loss = 0
         for pred_feat, target_feat in zip(pred_features, target_features):
-            loss += F.mse_loss(pred_feat, target_feat)
-        
+            loss = loss + F.mse_loss(pred_feat, target_feat)
         return loss / len(pred_features)
     
     def _extract_features(self, x: torch.Tensor) -> list:
@@ -197,41 +191,36 @@ class GradientLoss(nn.Module):
             raise ValueError(f"Unknown penalty: {self.penalty}")
     
     def _compute_gradient(self, x: torch.Tensor) -> torch.Tensor:
-        """Compute 3D gradient magnitude."""
-        # Sobel-like filters for 3D
-        grad_x = F.conv3d(x, self._sobel_kernel_x(), padding=1)
-        grad_y = F.conv3d(x, self._sobel_kernel_y(), padding=1)
-        grad_z = F.conv3d(x, self._sobel_kernel_z(), padding=1)
-        
-        # Gradient magnitude
+        """Compute 3D gradient magnitude. Ensures kernels are on the same device as x."""
+        device = x.device
+        grad_x = F.conv3d(x, self._sobel_kernel_x(device), padding=1)
+        grad_y = F.conv3d(x, self._sobel_kernel_y(device), padding=1)
+        grad_z = F.conv3d(x, self._sobel_kernel_z(device), padding=1)
         grad_mag = torch.sqrt(grad_x**2 + grad_y**2 + grad_z**2 + 1e-8)
         return grad_mag
-    
-    def _sobel_kernel_x(self) -> torch.Tensor:
-        """3D Sobel kernel for x-direction."""
+
+    def _sobel_kernel_x(self, device=None) -> torch.Tensor:
         kernel = torch.tensor([
             [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]],
             [[-2, 0, 2], [-4, 0, 4], [-2, 0, 2]],
             [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]
-        ], dtype=torch.float32)
+        ], dtype=torch.float32, device=device)
         return kernel.unsqueeze(0).unsqueeze(0)
-    
-    def _sobel_kernel_y(self) -> torch.Tensor:
-        """3D Sobel kernel for y-direction."""
+
+    def _sobel_kernel_y(self, device=None) -> torch.Tensor:
         kernel = torch.tensor([
             [[-1, -2, -1], [0, 0, 0], [1, 2, 1]],
             [[-2, -4, -2], [0, 0, 0], [2, 4, 2]],
             [[-1, -2, -1], [0, 0, 0], [1, 2, 1]]
-        ], dtype=torch.float32)
+        ], dtype=torch.float32, device=device)
         return kernel.unsqueeze(0).unsqueeze(0)
-    
-    def _sobel_kernel_z(self) -> torch.Tensor:
-        """3D Sobel kernel for z-direction."""
+
+    def _sobel_kernel_z(self, device=None) -> torch.Tensor:
         kernel = torch.tensor([
             [[-1, -2, -1], [-2, -4, -2], [-1, -2, -1]],
             [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
             [[1, 2, 1], [2, 4, 2], [1, 2, 1]]
-        ], dtype=torch.float32)
+        ], dtype=torch.float32, device=device)
         return kernel.unsqueeze(0).unsqueeze(0)
 
 

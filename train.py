@@ -341,33 +341,44 @@ class BaseTrainer:
             self.use_wandb = False
     
     def visualize_batch(self, num_samples: int = 2, phase: str = 'train'):
-        """Visualize a batch of data (inputs and targets) for sanity check."""
+        """Visualize a batch of data (inputs and targets) for sanity check, and log to wandb if enabled."""
         try:
             loader = self.train_loader if phase == 'train' else self.val_loader
             batch = next(iter(loader))
             inputs = batch['input'][:num_samples]
             targets = batch['target'][:num_samples]
             subject_names = batch.get('subject_name', [f'sample_{i}' for i in range(num_samples)])
-            
-            # Plot middle slice for each sample and channel
+
+            images = []
             for i in range(num_samples):
                 fig, axs = plt.subplots(1, inputs.shape[1] + 1, figsize=(16, 4))
-                
                 for c in range(inputs.shape[1]):
                     img = inputs[i, c].cpu().numpy()
                     mid = img.shape[-1] // 2
                     axs[c].imshow(img[..., mid], cmap='gray')
                     axs[c].set_title(f'Input ch{c}')
                     axs[c].axis('off')
-                
                 tgt = targets[i, 0].cpu().numpy()
                 mid = tgt.shape[-1] // 2
                 axs[-1].imshow(tgt[..., mid], cmap='hot')
                 axs[-1].set_title('Target')
                 axs[-1].axis('off')
                 plt.suptitle(f'Subject: {subject_names[i]}')
+                fig.tight_layout()
+                # Save to buffer for wandb
+                if self.use_wandb:
+                    import io
+                    buf = io.BytesIO()
+                    plt.savefig(buf, format='png')
+                    buf.seek(0)
+                    images.append(wandb.Image(buf, caption=f"{subject_names[i]} - batch visualization"))
                 plt.show()
-                
+                plt.close(fig)
+
+            # Log to wandb if enabled
+            if self.use_wandb and images:
+                current_step = self.step_tracker.get_global_step()
+                wandb.log({"batch_visualization": images}, step=current_step)
         except Exception as e:
             logger.error(f"Failed to visualize batch: {e}")
     
@@ -469,61 +480,62 @@ class SynthesisTrainer(BaseTrainer):
         total_loss = 0.0
         loss_components = {}
         num_batches = 0
-        
+        log_frequency = min(100, self.config.get('logging', {}).get('log_frequency', 100))
+        sample_frequency = log_frequency  # Log and sample at least every 100 batches
         try:
             for batch_idx, batch in enumerate(self.train_loader):
                 try:
                     # Move data to device
                     inputs = batch['input'].to(self.device)
                     targets = batch['target'].to(self.device)
-                    
+
                     # Validate tensor shapes
                     expected_input_shape = (inputs.shape[0], self.config.get('model', {}).get('in_channels', 4), *inputs.shape[2:])
                     expected_target_shape = (targets.shape[0], self.config.get('model', {}).get('out_channels', 1), *targets.shape[2:])
-                    
+
                     InputValidator.validate_tensors(inputs, targets, expected_input_shape, expected_target_shape)
-                    
+
                     # Forward pass
                     self.optimizer.zero_grad()
                     outputs = self.model(inputs)
-                    
+
                     # Validate outputs
                     if torch.isnan(outputs).any():
                         logger.warning(f"NaN detected in model outputs at batch {batch_idx}")
                         continue
-                    
+
                     # Compute loss
                     losses = self.criterion(outputs, targets)
                     total_loss_batch = losses['total']
-                    
+
                     # Check for NaN loss
                     if torch.isnan(total_loss_batch):
                         logger.warning(f"NaN loss detected at batch {batch_idx}, skipping")
                         continue
-                    
+
                     # Backward pass
                     total_loss_batch.backward()
-                    
+
                     # Gradient clipping
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                    
+
                     self.optimizer.step()
-                    
+
                     # Accumulate losses
                     total_loss += total_loss_batch.item()
                     for key, value in losses.items():
                         if key not in loss_components:
                             loss_components[key] = 0.0
                         loss_components[key] += value.item()
-                    
+
                     num_batches += 1
-                    
-                    # Log batch metrics
-                    if batch_idx % self.config.get('logging', {}).get('log_frequency', 100) == 0:
+
+                    # Log batch metrics and sample predictions at least every 100 batches
+                    if batch_idx % log_frequency == 0:
                         logger.info(f"Epoch {self.step_tracker.current_epoch}, "
-                                  f"Batch {batch_idx}/{len(self.train_loader)}, "
-                                  f"Loss: {total_loss_batch.item():.6f}")
-                        
+                                    f"Batch {batch_idx}/{len(self.train_loader)}, "
+                                    f"Loss: {total_loss_batch.item():.6f}")
+
                         # Log to W&B during training
                         if self.use_wandb:
                             current_step = self.step_tracker.step()
@@ -532,11 +544,19 @@ class SynthesisTrainer(BaseTrainer):
                                 'batch/epoch': self.step_tracker.current_epoch,
                                 'batch/learning_rate': self.optimizer.param_groups[0]['lr'],
                             }, step=current_step)
-                
+
+                        # Log sample predictions to wandb every sample_frequency batches
+                        if self.use_wandb and batch_idx % sample_frequency == 0:
+                            try:
+                                # Use a small batch for quick logging
+                                self.log_sample_predictions(num_samples=1)
+                            except Exception as e:
+                                logger.warning(f"Failed to log sample predictions at batch {batch_idx}: {e}")
+
                 except Exception as e:
                     logger.error(f"Error in batch {batch_idx}: {e}")
                     continue
-            
+
             # Average losses
             if num_batches > 0:
                 avg_loss = total_loss / num_batches
@@ -545,9 +565,9 @@ class SynthesisTrainer(BaseTrainer):
             else:
                 avg_loss = float('inf')
                 logger.warning("No valid batches processed in epoch")
-            
+
             return {'total_loss': avg_loss, **loss_components}
-            
+
         except Exception as e:
             logger.error(f"Fatal error in train_epoch: {e}")
             logger.error(traceback.format_exc())

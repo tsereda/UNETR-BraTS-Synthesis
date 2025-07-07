@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Super Simple BraTS Segmentation - Fixed to work like the notebook!
-Follows MONAI tutorial best practices with W&B logging.
+Super Simple BraTS Segmentation - Clean and Simple!
+Just finds all BraTS cases and trains with W&B logging.
 """
 
 import os
@@ -42,91 +42,39 @@ class AverageMeter(object):
         self.avg = np.where(self.count > 0, self.sum / self.count, self.sum)
 
 
-def find_brats_cases(data_dir, max_cases=None, verbose=False):
-    """Find BraTS cases with flexible naming pattern detection"""
+def find_brats_cases(data_dir):
+    """Simple BraTS case finder for 2023 GLI format"""
     cases = []
     
     print(f"Scanning {data_dir} for BraTS cases...")
     
-    # Look for BraTS directories
     for item in os.listdir(data_dir):
         if 'BraTS' in item and os.path.isdir(os.path.join(data_dir, item)):
             case_path = os.path.join(data_dir, item)
-            files = os.listdir(case_path)
             
-            if verbose:
-                print(f"\nExamining case: {item}")
-                print(f"Files found: {files}")
+            # Simple pattern: {case_name}-{modality}.nii.gz
+            flair_file = f"{item}-t2f.nii.gz"
+            t1ce_file = f"{item}-t1c.nii.gz"
+            t1_file = f"{item}-t1n.nii.gz"
+            t2_file = f"{item}-t2w.nii.gz"
+            seg_file = f"{item}-seg.nii.gz"
             
-            # Try multiple naming patterns
-            patterns = [
-                # BraTS 2023 GLI pattern: {case_id}-{modality}.nii.gz
-                {
-                    'flair': lambda f: f.endswith('-t2f.nii.gz'),
-                    't1ce': lambda f: f.endswith('-t1c.nii.gz'),
-                    't1': lambda f: f.endswith('-t1n.nii.gz'),
-                    't2': lambda f: f.endswith('-t2w.nii.gz'),
-                    'seg': lambda f: f.endswith('-seg.nii.gz')
-                },
-                # BraTS 2021/2020 pattern: BraTS20XX_XXXXX_{modality}.nii.gz
-                {
-                    'flair': lambda f: '_flair.nii.gz' in f.lower(),
-                    't1ce': lambda f: '_t1ce.nii.gz' in f.lower(),
-                    't1': lambda f: ('_t1.nii.gz' in f.lower() and '_t1ce.nii.gz' not in f.lower()),
-                    't2': lambda f: '_t2.nii.gz' in f.lower(),
-                    'seg': lambda f: '_seg.nii.gz' in f.lower()
-                },
-                # Alternative patterns
-                {
-                    'flair': lambda f: 'flair' in f.lower() and f.endswith('.nii.gz'),
-                    't1ce': lambda f: 't1ce' in f.lower() and f.endswith('.nii.gz'),
-                    't1': lambda f: ('t1' in f.lower() and 't1ce' not in f.lower() and f.endswith('.nii.gz')),
-                    't2': lambda f: 't2' in f.lower() and 'flair' not in f.lower() and f.endswith('.nii.gz'),
-                    'seg': lambda f: 'seg' in f.lower() and f.endswith('.nii.gz')
-                }
-            ]
-            
-            found_files = None
-            
-            # Try each pattern
-            for pattern in patterns:
-                flair = next((f for f in files if pattern['flair'](f)), None)
-                t1ce = next((f for f in files if pattern['t1ce'](f)), None)
-                t1 = next((f for f in files if pattern['t1'](f)), None)
-                t2 = next((f for f in files if pattern['t2'](f)), None)
-                seg = next((f for f in files if pattern['seg'](f)), None)
-                
-                if verbose:
-                    print(f"Pattern attempt - FLAIR: {flair}, T1CE: {t1ce}, T1: {t1}, T2: {t2}, SEG: {seg}")
-                
-                if all([flair, t1ce, t1, t2, seg]):
-                    found_files = {
-                        'flair': flair, 't1ce': t1ce, 't1': t1, 't2': t2, 'seg': seg
-                    }
-                    break
-            
-            if found_files:
+            # Check if all files exist
+            if all(os.path.exists(os.path.join(case_path, f)) for f in [flair_file, t1ce_file, t1_file, t2_file, seg_file]):
                 case_data = {
                     "image": [
-                        os.path.join(case_path, found_files['flair']),
-                        os.path.join(case_path, found_files['t1ce']), 
-                        os.path.join(case_path, found_files['t1']),
-                        os.path.join(case_path, found_files['t2'])
+                        os.path.join(case_path, flair_file),
+                        os.path.join(case_path, t1ce_file), 
+                        os.path.join(case_path, t1_file),
+                        os.path.join(case_path, t2_file)
                     ],
-                    "label": os.path.join(case_path, found_files['seg']),
+                    "label": os.path.join(case_path, seg_file),
                     "case_id": item
                 }
                 cases.append(case_data)
                 
-                if len(cases) % 100 == 0:  # Progress update every 100 cases
+                if len(cases) % 100 == 0:
                     print(f"Found {len(cases)} valid cases so far...")
-                
-                if max_cases is not None and len(cases) >= max_cases:
-                    break
-            else:
-                if verbose:
-                    print(f"✗ Could not find all required files for case: {item}")
-                    print(f"  Available files: {files}")
     
     return cases
 
@@ -138,7 +86,6 @@ def log_segmentation_sample(image, label, prediction, case_name, epoch=None):
         
         fig, axes = plt.subplots(1, 4, figsize=(16, 4))
         
-        # Plot images
         axes[0].imshow(image[1, :, :, slice_idx], cmap='gray')
         axes[0].set_title('T1CE')
         axes[0].axis('off')
@@ -167,8 +114,8 @@ def log_segmentation_sample(image, label, prediction, case_name, epoch=None):
         print(f"Error logging segmentation sample: {e}")
 
 
-def train_epoch(model, loader, optimizer, epoch, loss_func, max_epochs, batch_size):
-    """Training epoch following notebook pattern"""
+def train_epoch(model, loader, optimizer, epoch, loss_func, max_epochs):
+    """Training epoch"""
     model.train()
     start_time = time.time()
     run_loss = AverageMeter()
@@ -182,7 +129,7 @@ def train_epoch(model, loader, optimizer, epoch, loss_func, max_epochs, batch_si
         loss.backward()
         optimizer.step()
         
-        run_loss.update(loss.item(), n=batch_size)
+        run_loss.update(loss.item(), n=data.shape[0])
         print(
             "Epoch {}/{} {}/{}".format(epoch, max_epochs, idx, len(loader)),
             "loss: {:.4f}".format(run_loss.avg),
@@ -194,7 +141,7 @@ def train_epoch(model, loader, optimizer, epoch, loss_func, max_epochs, batch_si
 
 
 def val_epoch(model, loader, epoch, acc_func, model_inferer, post_sigmoid, post_pred, max_epochs):
-    """Validation epoch following notebook pattern"""
+    """Validation epoch"""
     model.eval()
     start_time = time.time()
     run_acc = AverageMeter()
@@ -233,13 +180,13 @@ def val_epoch(model, loader, epoch, acc_func, model_inferer, post_sigmoid, post_
 
 def main():
     # Initialize W&B
-    wandb.init(project="BraTS-Simple-Seg", name="notebook_style_training")
+    wandb.init(project="BraTS-Simple-Seg", name="simple_full_training")
     
     # Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
-    # Find data
+    # Find all BraTS cases
     print("Looking for BraTS data...")
     base_dir = "/app/UNETR-BraTS-Synthesis"
     training_dir = os.path.join(base_dir, "ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData")
@@ -247,25 +194,15 @@ def main():
     print(f"Scanning directory: {training_dir}")
     print(f"Directory exists: {os.path.exists(training_dir)}")
     
-    # Option to limit cases for testing - set to None to use all cases
-    # For first run, you might want to set this to 50 to test everything works
-    TEST_MODE = False  # Set to True for quick testing with limited cases
-    max_cases_to_use = 50 if TEST_MODE else None
-    
-    if TEST_MODE:
-        print("⚠️  Running in TEST MODE - using only first 50 cases")
-        print("   Set TEST_MODE = False in the script to use all cases")
-    
-    cases = find_brats_cases(training_dir, max_cases=max_cases_to_use, verbose=TEST_MODE)
+    cases = find_brats_cases(training_dir)
     print(f"\n=== SUMMARY ===")
     print(f"Found {len(cases)} valid cases")
     
     if not cases:
         print("No BraTS cases found!")
-        print("Please check the file naming convention in your BraTS directories.")
         return
     
-    # Split into train/val (80/20 split)
+    # Split into train/val (80/20)
     split_idx = max(1, int(len(cases) * 0.8))
     train_cases = cases[:split_idx]
     val_cases = cases[split_idx:]
@@ -273,7 +210,7 @@ def main():
     print(f"Training cases: {len(train_cases)}")
     print(f"Validation cases: {len(val_cases)}")
     
-    # Transforms following notebook
+    # Transforms
     roi = (128, 128, 128)
     
     train_transform = transforms.Compose([
@@ -304,19 +241,16 @@ def main():
         transforms.NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
     ])
     
-    # Data loaders - adjust batch size and workers based on dataset size
-    batch_size = 2 if len(train_cases) > 100 else 1  # Larger batch for big datasets
-    num_workers = 8 if len(train_cases) > 100 else 4  # More workers for large datasets
-    
+    # Data loaders
     train_ds = Dataset(data=train_cases, transform=train_transform)
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
+    train_loader = DataLoader(train_ds, batch_size=2, shuffle=True, num_workers=8, pin_memory=True)
     
     val_ds = Dataset(data=val_cases, transform=val_transform)
-    val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=num_workers, pin_memory=True)
+    val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=8, pin_memory=True)
     
     print(f"Training batches: {len(train_loader)}, Validation batches: {len(val_loader)}")
     
-    # Model following notebook configuration
+    # Model
     model = SwinUNETR(
         in_channels=4,
         out_channels=3,
@@ -327,7 +261,7 @@ def main():
         use_checkpoint=True,
     ).cuda()
     
-    # Loss and metrics following notebook
+    # Loss and metrics
     torch.backends.cudnn.benchmark = True
     dice_loss = DiceLoss(to_onehot_y=False, sigmoid=True)
     post_sigmoid = Activations(sigmoid=True)
@@ -342,21 +276,15 @@ def main():
         overlap=0.5,
     )
     
+    # Training setup
+    max_epochs = 50
+    val_every = 5
+    
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
-    # Scheduler will be set after we know max_epochs
-    
-    # Training parameters - adjust based on dataset size
-    if len(train_cases) > 100:
-        max_epochs = 50
-        val_every = 5
-        print(f"Large dataset detected ({len(train_cases)} cases) - using {max_epochs} epochs")
-    else:
-        max_epochs = 10
-        val_every = 2
-        print(f"Small dataset ({len(train_cases)} cases) - using {max_epochs} epochs")
-    
-    # Set up scheduler now that we know max_epochs
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_epochs)
+    
+    print(f"Training for {max_epochs} epochs, validation every {val_every} epochs")
+    
     val_acc_max = 0.0
     
     for epoch in range(max_epochs):
@@ -370,8 +298,7 @@ def main():
             optimizer=optimizer,
             epoch=epoch,
             loss_func=dice_loss,
-            max_epochs=max_epochs,
-            batch_size=batch_size
+            max_epochs=max_epochs
         )
         
         print(

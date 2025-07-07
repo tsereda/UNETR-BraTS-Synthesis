@@ -58,7 +58,7 @@ validation:
 logging:
   use_wandb: true
   project_name: "UNETR-BraTS-Synthesis"
-  log_frequency: 100
+  log_frequency: 25
   save_frequency: 1000
   tags: ["brats", "synthesis", "unetr", "base"]
 

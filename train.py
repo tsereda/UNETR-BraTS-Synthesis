@@ -277,7 +277,7 @@ class Trainer:
                 loss_components[key] += value.item()
 
             # Log batch metrics periodically to console and wandb
-            if batch_idx % self.config.get('logging', {}).get('log_frequency', 100) == 0:
+            if batch_idx % self.config.get('logging', {}).get('log_frequency', 25) == 0:
                 print(f"  Batch {batch_idx}/{len(self.train_loader)}, Loss: {total_loss_batch.item():.6f}")
                 if self.use_wandb:
                     wandb.log({

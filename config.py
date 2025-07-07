@@ -11,7 +11,7 @@ import os
 # =============================================================================
 
 # Path to your BRATS data directory (containing training/ and validation/ folders)
-DATA_ROOT = "/path/to/your/data/BRATS"
+DATA_ROOT = "ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData"
 
 # Path where the JSON file will be created/loaded from
 JSON_FILE = os.path.join(DATA_ROOT, "brats_synthesis_data.json")

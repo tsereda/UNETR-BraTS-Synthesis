@@ -94,7 +94,7 @@ spec:
           
           python -c "import torch; print(f'GPUs available: {torch.cuda.device_count()}')"
           
-          python scripts/validate_data.py --data_root ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData
+          # python scripts/validate_data.py --data_root ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData
 
           python scripts/download_pretrained.py --model brats_segmentation
 

@@ -197,33 +197,33 @@ class Trainer:
             # Move data to device
             inputs = batch['input'].to(self.device)
             targets = batch['target'].to(self.device)
-            
+
             # Forward pass
             self.optimizer.zero_grad()
             outputs = self.model(inputs)
-            
+
             # Compute loss
             losses = self.criterion(outputs, targets)
             total_loss_batch = losses['total']
-            
+
             # Backward pass
             total_loss_batch.backward()
             self.optimizer.step()
-            
+
             # Accumulate losses
             total_loss += total_loss_batch.item()
             for key, value in losses.items():
                 if key not in loss_components:
                     loss_components[key] = 0.0
                 loss_components[key] += value.item()
-            
+
             num_batches += 1
-            
+
             # Log batch metrics
             if batch_idx % self.config.get('logging', {}).get('log_frequency', 100) == 0:
                 print(f"Batch {batch_idx}/{len(self.train_loader)}, "
                       f"Loss: {total_loss_batch.item():.6f}")
-                
+
                 # Log to W&B during training for more frequent updates
                 if self.use_wandb:
                     global_step = self.current_epoch * len(self.train_loader) + batch_idx
@@ -233,6 +233,11 @@ class Trainer:
                         'batch/learning_rate': self.optimizer.param_groups[0]['lr'],
                         'batch/global_step': global_step
                     }, step=global_step)
+
+            # Log sample predictions to W&B every 100 batches
+            if self.use_wandb and batch_idx % 100 == 0:
+                if hasattr(self, 'log_sample_predictions'):
+                    self.log_sample_predictions()
         
         # Average losses
         avg_loss = total_loss / num_batches

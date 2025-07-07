@@ -327,61 +327,138 @@ class SynthesisTrainer:
             print(f"Saved best model at epoch {self.current_epoch}")
     
     def log_sample_predictions(self, num_samples: int = 2):
-        """Log sample predictions to W&B for visualization."""
+        """Log sample predictions to W&B for visualization (medical imaging aware)."""
+        import numpy as np
+        import matplotlib.pyplot as plt
+        from io import BytesIO
+        import torch.nn.functional as F
         if not self.use_wandb:
             return
-            
-        import numpy as np
-        
         self.model.eval()
-        
         try:
             batch = next(iter(self.val_loader))
-        except Exception:
+        except Exception as e:
+            print(f"[W&B Viz] Error loading batch: {e}")
             return
-            
         inputs = batch['input'][:num_samples].to(self.device)
         targets = batch['target'][:num_samples].to(self.device)
         subject_names = batch.get('subject_name', [f'sample_{i}' for i in range(num_samples)])
-        
         with torch.no_grad():
             outputs = self.model(inputs)
-        
-        # Convert tensors to numpy for visualization
-        inputs_np = inputs.cpu().numpy()
-        targets_np = targets.cpu().numpy()
-        outputs_np = outputs.cpu().numpy()
-        
+        # Squeeze singleton channel if needed
+        def safe_squeeze(x):
+            return x.squeeze(1) if x.ndim == 5 and x.shape[1] == 1 else x
+        inputs = safe_squeeze(inputs)
+        targets = safe_squeeze(targets)
+        outputs = safe_squeeze(outputs)
+        # Compute metrics
+        mse = F.mse_loss(outputs, targets).item()
+        mae = F.l1_loss(outputs, targets).item()
+        # Visualization
         images = []
-        for i in range(min(num_samples, inputs_np.shape[0])):
-            # Take the middle slice
-            input_img = inputs_np[i, 0]  # first channel
-            target_img = targets_np[i, 0]
-            output_img = outputs_np[i, 0]
-            
-            mid_slice = input_img.shape[-1] // 2
-            input_slice = input_img[..., mid_slice]
-            target_slice = target_img[..., mid_slice]
-            output_slice = output_img[..., mid_slice]
-            
-            # Normalize to [0, 255] for wandb.Image
-            def norm255(x):
-                x = x.astype(np.float32)
-                x = (x - x.min()) / (x.max() - x.min() + 1e-8)
-                return (x * 255).astype(np.uint8)
-            
-            input_slice = norm255(input_slice)
-            output_slice = norm255(output_slice)
-            target_slice = norm255(target_slice)
-            
-            # Stack for comparison
-            stacked = np.stack([input_slice, output_slice, target_slice], axis=-1)
-            caption = f"{subject_names[i] if isinstance(subject_names, list) else i} (input/output/target)"
-            images.append(wandb.Image(stacked, caption=caption))
-        
-        self.global_step += 1
+        for i in range(inputs.shape[0]):
+            # Pick slice with max variance in target (best anatomical content)
+            target_np = targets[i].detach().cpu().numpy()
+            if target_np.ndim == 3:
+                slice_axis = np.argmax(target_np.shape)
+                # Find slice with max std
+                stds = target_np.std(axis=tuple(j for j in range(3) if j != slice_axis))
+                best_slice = np.argmax(stds)
+            else:
+                best_slice = target_np.shape[-1] // 2
+                slice_axis = -1
+            def get_slice(vol, idx, axis):
+                return np.take(vol, idx, axis=axis)
+            # Prepare figure
+            n_inputs = inputs.shape[1] if inputs.ndim == 4 else 1
+            fig, axs = plt.subplots(1, n_inputs + 2, figsize=(4*(n_inputs+2), 4))
+            # Plot all input modalities
+            for c in range(n_inputs):
+                img = inputs[i, c].detach().cpu().numpy() if n_inputs > 1 else inputs[i].detach().cpu().numpy()
+                img_slice = get_slice(img, best_slice, slice_axis)
+                axs[c].imshow(img_slice, cmap='gray')
+                axs[c].set_title(f'Input ch{c}')
+                axs[c].axis('off')
+            # Target
+            tgt_slice = get_slice(target_np, best_slice, slice_axis)
+            axs[n_inputs].imshow(tgt_slice, cmap='hot')
+            axs[n_inputs].set_title('Target ⭐')
+            axs[n_inputs].axis('off')
+            # Prediction
+            pred_np = outputs[i].detach().cpu().numpy()
+            pred_slice = get_slice(pred_np, best_slice, slice_axis)
+            axs[n_inputs+1].imshow(pred_slice, cmap='hot')
+            axs[n_inputs+1].set_title('Prediction')
+            axs[n_inputs+1].axis('off')
+            # Metrics and info
+            fig.suptitle(f"{subject_names[i]} | Slice {best_slice} | MSE: {mse:.4f} | MAE: {mae:.4f}")
+            plt.tight_layout()
+            buf = BytesIO()
+            plt.savefig(buf, format='png')
+            plt.close(fig)
+            buf.seek(0)
+            images.append(wandb.Image(buf, caption=f"{subject_names[i]}"))
         wandb.log({"sample_predictions": images}, step=self.global_step)
         self.model.train()
+
+    def test_visualization_debug(self, num_samples: int = 2, phase: str = 'val', out_file: str = 'debug_visualization.png'):
+        """Save a debug visualization of sample predictions to a local file for inspection."""
+        import numpy as np
+        import matplotlib.pyplot as plt
+        from io import BytesIO
+        import torch.nn.functional as F
+        self.model.eval()
+        loader = self.val_loader if phase == 'val' else self.train_loader
+        try:
+            batch = next(iter(loader))
+        except Exception as e:
+            print(f"[Debug Viz] Error loading batch: {e}")
+            return
+        inputs = batch['input'][:num_samples].to(self.device)
+        targets = batch['target'][:num_samples].to(self.device)
+        subject_names = batch.get('subject_name', [f'sample_{i}' for i in range(num_samples)])
+        with torch.no_grad():
+            outputs = self.model(inputs)
+        def safe_squeeze(x):
+            return x.squeeze(1) if x.ndim == 5 and x.shape[1] == 1 else x
+        inputs = safe_squeeze(inputs)
+        targets = safe_squeeze(targets)
+        outputs = safe_squeeze(outputs)
+        mse = F.mse_loss(outputs, targets).item()
+        mae = F.l1_loss(outputs, targets).item()
+        for i in range(inputs.shape[0]):
+            target_np = targets[i].detach().cpu().numpy()
+            if target_np.ndim == 3:
+                slice_axis = np.argmax(target_np.shape)
+                stds = target_np.std(axis=tuple(j for j in range(3) if j != slice_axis))
+                best_slice = np.argmax(stds)
+            else:
+                best_slice = target_np.shape[-1] // 2
+                slice_axis = -1
+            def get_slice(vol, idx, axis):
+                return np.take(vol, idx, axis=axis)
+            n_inputs = inputs.shape[1] if inputs.ndim == 4 else 1
+            fig, axs = plt.subplots(1, n_inputs + 2, figsize=(4*(n_inputs+2), 4))
+            for c in range(n_inputs):
+                img = inputs[i, c].detach().cpu().numpy() if n_inputs > 1 else inputs[i].detach().cpu().numpy()
+                img_slice = get_slice(img, best_slice, slice_axis)
+                axs[c].imshow(img_slice, cmap='gray')
+                axs[c].set_title(f'Input ch{c}')
+                axs[c].axis('off')
+            tgt_slice = get_slice(target_np, best_slice, slice_axis)
+            axs[n_inputs].imshow(tgt_slice, cmap='hot')
+            axs[n_inputs].set_title('Target ⭐')
+            axs[n_inputs].axis('off')
+            pred_np = outputs[i].detach().cpu().numpy()
+            pred_slice = get_slice(pred_np, best_slice, slice_axis)
+            axs[n_inputs+1].imshow(pred_slice, cmap='hot')
+            axs[n_inputs+1].set_title('Prediction')
+            axs[n_inputs+1].axis('off')
+            fig.suptitle(f"{subject_names[i]} | Slice {best_slice} | MSE: {mse:.4f} | MAE: {mae:.4f}")
+            plt.tight_layout()
+            fig.savefig(out_file)
+            plt.close(fig)
+            print(f"[Debug Viz] Saved visualization to {out_file}")
     
     def train(self):
         """Main training loop."""

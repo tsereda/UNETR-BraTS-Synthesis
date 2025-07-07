@@ -259,6 +259,10 @@ class Trainer:
                         'batch/learning_rate': self.optimizer.param_groups[0]['lr']
                     }, step=self.global_step)
 
+            # Log sample predictions every 25 batches
+            if self.use_wandb and batch_idx % 25 == 0:
+                self.log_sample_predictions()
+
         # Average losses
         avg_loss = total_loss / num_batches
         for key in loss_components:
@@ -472,10 +476,6 @@ class Trainer:
                             log_dict[f'val/{k}'] = v
                     
                     wandb.log(log_dict, step=self.global_step)
-                
-                # Log sample predictions every 20 epochs
-                if self.use_wandb and epoch % 20 == 0:
-                    self.log_sample_predictions()
                 
                 # Early stopping
                 if patience_counter >= early_stopping_patience:

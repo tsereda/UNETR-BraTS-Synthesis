@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Simplified working training script for UNETR-based BraTS synthesis and segmentation models.
-Fixed wandb sample logging and debug output.
+Fixed wandb sample logging, removed matplotlib dependencies.
 """
 
 import os
@@ -14,7 +14,6 @@ from torch.utils.data import DataLoader
 from pathlib import Path
 import wandb
 import numpy as np
-import matplotlib.pyplot as plt
 from typing import Dict, Any, Optional
 
 # Add src to path
@@ -147,21 +146,25 @@ class Trainer:
         """Setup logging with wandb if enabled."""
         logging_config = self.config.get('logging', {})
         if logging_config.get('use_wandb', False):
-            self.use_wandb = True
-            project_name = os.getenv('WANDB_PROJECT', logging_config.get('project_name', 'unetr-brats-synthesis'))
-            entity_name = os.getenv('WANDB_ENTITY', None)
-            
-            wandb_config = {
-                'project': project_name,
-                'name': self.exp_name,
-                'config': self.config,
-                'tags': logging_config.get('tags', [])
-            }
-            if entity_name:
-                wandb_config['entity'] = entity_name
+            try:
+                self.use_wandb = True
+                project_name = os.getenv('WANDB_PROJECT', logging_config.get('project_name', 'unetr-brats-synthesis'))
+                entity_name = os.getenv('WANDB_ENTITY', None)
                 
-            wandb.init(**wandb_config)
-            print(f"W&B logging enabled. Project: {project_name}")
+                wandb_config = {
+                    'project': project_name,
+                    'name': self.exp_name,
+                    'config': self.config,
+                    'tags': logging_config.get('tags', [])
+                }
+                if entity_name:
+                    wandb_config['entity'] = entity_name
+                    
+                wandb.init(**wandb_config)
+                print(f"W&B logging enabled. Project: {project_name}")
+            except Exception as e:
+                print(f"Warning: Failed to initialize wandb: {e}")
+                self.use_wandb = False
 
     def train(self):
         """Main training loop."""
@@ -212,9 +215,10 @@ class Trainer:
                         'val/is_best': is_best
                     }, step=self.global_step)
 
-                # Always log sample predictions during validation
-                print("Logging sample predictions...")
-                self.log_sample_predictions()
+                # Log sample predictions during validation
+                if self.use_wandb:
+                    print("Logging sample predictions to wandb...")
+                    self.log_sample_predictions()
 
                 # Check for early stopping
                 if patience_counter >= early_stopping_patience:
@@ -314,8 +318,11 @@ class Trainer:
             print(f"Saved new best model at epoch {self.current_epoch}")
 
     def log_sample_predictions(self, num_samples: int = 2):
-        """Log sample predictions to W&B and console."""
-        print(f"DEBUG: Starting log_sample_predictions, use_wandb={self.use_wandb}")
+        """Log sample predictions to W&B."""
+        if not self.use_wandb:
+            return
+            
+        print(f"Logging {num_samples} sample predictions to wandb...")
         
         self.model.eval()
         
@@ -323,122 +330,103 @@ class Trainer:
         try:
             val_iter = iter(self.val_loader)
             batch = next(val_iter)
-            print(f"DEBUG: Successfully loaded batch from val_loader")
         except Exception as e:
-            print(f"DEBUG: Error loading batch: {e}")
+            print(f"Error loading validation batch: {e}")
             return
 
         # Process inputs and get predictions
         with torch.no_grad():
             inputs = batch['input'][:num_samples].to(self.device)
-            targets = batch['target'][:num_samples]
-            outputs = self.model(inputs).cpu()
+            targets = batch['target'][:num_samples].to(self.device)
+            outputs = self.model(inputs)
             
-        print(f"DEBUG: Generated predictions for {inputs.shape[0]} samples")
-        print(f"DEBUG: Input shape: {inputs.shape}, Target shape: {targets.shape}, Output shape: {outputs.shape}")
+            # Move to CPU and convert to numpy
+            inputs_np = inputs.cpu().numpy()
+            targets_np = targets.cpu().numpy()
+            outputs_np = outputs.cpu().numpy()
+            
+        print(f"Generated predictions for {inputs_np.shape[0]} samples")
+        print(f"Input shape: {inputs_np.shape}, Target shape: {targets_np.shape}, Output shape: {outputs_np.shape}")
 
-        # Create visualizations
-        def normalize_for_display(x):
-            """Normalize array to 0-255 range for display."""
-            x = x.astype(np.float32)
-            x_min, x_max = x.min(), x.max()
-            if x_max - x_min < 1e-8:
-                return np.zeros_like(x, dtype=np.uint8)
-            return ((x - x_min) / (x_max - x_min) * 255).astype(np.uint8)
-
-        # Log to wandb if enabled
-        if self.use_wandb:
+        # Create wandb images
+        try:
             images = []
-            for i in range(min(num_samples, inputs.shape[0])):
-                # Get middle slice
-                mid_slice = inputs.shape[-1] // 2
+            for i in range(min(num_samples, inputs_np.shape[0])):
+                # Get middle slice for visualization
+                mid_slice = inputs_np.shape[-1] // 2
                 
-                input_slice = inputs[i, 0].cpu().numpy()[..., mid_slice]
-                target_slice = targets[i, 0].numpy()[..., mid_slice]
-                output_slice = outputs[i, 0].detach().numpy()[..., mid_slice]
+                # Extract slices (assuming first channel for visualization)
+                input_slice = inputs_np[i, 0, ..., mid_slice]
+                target_slice = targets_np[i, 0, ..., mid_slice]
+                output_slice = outputs_np[i, 0, ..., mid_slice]
                 
-                # Normalize for display
-                input_norm = normalize_for_display(input_slice)
-                target_norm = normalize_for_display(target_slice)
-                output_norm = normalize_for_display(output_slice)
+                # Normalize slices to [0, 1] range for wandb
+                def normalize_slice(x):
+                    x = x.astype(np.float32)
+                    x_min, x_max = x.min(), x.max()
+                    if x_max - x_min < 1e-8:
+                        return np.zeros_like(x)
+                    return (x - x_min) / (x_max - x_min)
                 
-                # Stack horizontally: Input | Prediction | Target
-                combined = np.concatenate([input_norm, output_norm, target_norm], axis=1)
+                input_norm = normalize_slice(input_slice)
+                target_norm = normalize_slice(target_slice)
+                output_norm = normalize_slice(output_slice)
                 
-                subject_name = batch.get('subject_name', [f'sample_{i}' for i in range(num_samples)])[i]
+                # Create side-by-side comparison
+                h, w = input_norm.shape
+                combined = np.zeros((h, w * 3))
+                combined[:, :w] = input_norm
+                combined[:, w:2*w] = output_norm
+                combined[:, 2*w:] = target_norm
+                
+                # Get subject name if available
+                subject_names = batch.get('subject_name', [f'sample_{j}' for j in range(num_samples)])
+                subject_name = subject_names[i] if i < len(subject_names) else f'sample_{i}'
+                
                 caption = f"Epoch {self.current_epoch} - {subject_name}: Input | Prediction | Target"
                 
-                images.append(wandb.Image(combined, caption=caption))
-                print(f"DEBUG: Created wandb image for sample {i}")
-            
+                # Create wandb image
+                wandb_img = wandb.Image(
+                    combined, 
+                    caption=caption,
+                    mode="F"  # Float mode for grayscale
+                )
+                images.append(wandb_img)
+                
             # Log to wandb
-            wandb.log({"sample_predictions": images}, step=self.global_step)
-            print(f"DEBUG: Logged {len(images)} images to wandb at step {self.global_step}")
-        
-        # Also save locally for debugging
-        try:
-            fig, axes = plt.subplots(num_samples, 3, figsize=(12, 4*num_samples))
-            if num_samples == 1:
-                axes = axes.reshape(1, -1)
-            
-            for i in range(min(num_samples, inputs.shape[0])):
-                mid_slice = inputs.shape[-1] // 2
+            if images:
+                log_dict = {"predictions/samples": images}
+                wandb.log(log_dict, step=self.global_step)
+                print(f"Successfully logged {len(images)} images to wandb at step {self.global_step}")
+            else:
+                print("No images to log")
                 
-                input_slice = inputs[i, 0].cpu().numpy()[..., mid_slice]
-                target_slice = targets[i, 0].numpy()[..., mid_slice]
-                output_slice = outputs[i, 0].detach().numpy()[..., mid_slice]
-                
-                axes[i, 0].imshow(input_slice, cmap='gray')
-                axes[i, 0].set_title(f'Sample {i} - Input')
-                axes[i, 0].axis('off')
-                
-                axes[i, 1].imshow(output_slice, cmap='gray')
-                axes[i, 1].set_title(f'Sample {i} - Prediction')
-                axes[i, 1].axis('off')
-                
-                axes[i, 2].imshow(target_slice, cmap='gray')
-                axes[i, 2].set_title(f'Sample {i} - Target')
-                axes[i, 2].axis('off')
-            
-            plt.tight_layout()
-            save_path = self.exp_dir / f'predictions_epoch_{self.current_epoch}.png'
-            plt.savefig(save_path, dpi=100, bbox_inches='tight')
-            plt.close()
-            print(f"DEBUG: Saved visualization to {save_path}")
-            
         except Exception as e:
-            print(f"DEBUG: Error creating matplotlib visualization: {e}")
+            print(f"Error creating wandb images: {e}")
+            import traceback
+            traceback.print_exc()
         
         self.model.train()
 
-    def visualize_batch(self, num_samples: int = 2, phase: str = 'train'):
-        """Visualize a batch of data for sanity check."""
+    def print_data_summary(self, num_samples: int = 2, phase: str = 'train'):
+        """Print summary of data batch for debugging (no visualization)."""
         loader = self.train_loader if phase == 'train' else self.val_loader
         batch = next(iter(loader))
         inputs = batch['input'][:num_samples]
         targets = batch['target'][:num_samples]
         subject_names = batch.get('subject_name', [f'sample_{i}' for i in range(num_samples)])
 
+        print(f"\n=== {phase.upper()} Data Summary ===")
         for i in range(num_samples):
-            fig, axs = plt.subplots(1, inputs.shape[1] + 1, figsize=(16, 4))
+            inp = inputs[i]
+            tgt = targets[i]
+            subj = subject_names[i] if i < len(subject_names) else f'sample_{i}'
             
-            # Show all input channels
-            for c in range(inputs.shape[1]):
-                img = inputs[i, c].cpu().numpy()
-                mid = img.shape[-1] // 2
-                axs[c].imshow(img[..., mid], cmap='gray')
-                axs[c].set_title(f'Input ch{c}')
-                axs[c].axis('off')
-            
-            # Show target
-            tgt = targets[i, 0].cpu().numpy()
-            mid = tgt.shape[-1] // 2
-            axs[-1].imshow(tgt[..., mid], cmap='hot')
-            axs[-1].set_title('Target')
-            axs[-1].axis('off')
-            
-            plt.suptitle(f'Subject: {subject_names[i]}')
-            plt.show()
+            print(f"Subject {i}: {subj}")
+            print(f"  Input shape: {inp.shape}, dtype: {inp.dtype}")
+            print(f"  Input range: [{inp.min():.3f}, {inp.max():.3f}]")
+            print(f"  Target shape: {tgt.shape}, dtype: {tgt.dtype}")
+            print(f"  Target range: [{tgt.min():.3f}, {tgt.max():.3f}]")
 
 
 class SegmentationTrainer(Trainer):
@@ -529,9 +517,9 @@ def main():
         print("Initializing standard Trainer for synthesis.")
         trainer = Trainer(config, args.exp_name)
     
-    # Visualize batch before training
-    print("Visualizing sample batch...")
-    trainer.visualize_batch(num_samples=2, phase='train')
+    # Print data summary instead of visualization
+    print("Checking sample data...")
+    trainer.print_data_summary(num_samples=2, phase='train')
     
     # Start training
     trainer.train()

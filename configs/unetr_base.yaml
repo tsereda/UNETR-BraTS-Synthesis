@@ -15,7 +15,7 @@ model:
 
 data:
   modalities: ["t1n", "t1c", "t2w", "t2f"]
-  volume_size: [96, 96, 96]
+  volume_size: [200, 200, 200]
   num_workers: 4
   cache_rate: 0.1
   target_modality: null  # null for random selection during training

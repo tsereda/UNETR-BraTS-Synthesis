@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Super Simple BraTS Segmentation - Clean and Simple!
-Just finds all BraTS cases and trains with W&B logging.
+BraTS Segmentation
 """
 
 import os

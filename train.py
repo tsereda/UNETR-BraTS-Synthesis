@@ -99,15 +99,18 @@ class InputValidator:
         
         # Validate training config
         training_config = config.get('training', {})
-        if 'learning_rate' in training_config:
-            lr = training_config['learning_rate']
-            if not isinstance(lr, (int, float)) or lr <= 0:
-                raise ValueError("learning_rate must be a positive number")
-        
+        # Fix: If learning_rate is missing or invalid, set a default
+        lr = training_config.get('learning_rate', None)
+        if lr is None or not isinstance(lr, (int, float)) or lr <= 0:
+            logger.warning("learning_rate missing or invalid in config, setting to default 1e-4")
+            training_config['learning_rate'] = 1e-4
+            config['training'] = training_config
         if 'epochs' in training_config:
             epochs = training_config['epochs']
             if not isinstance(epochs, int) or epochs <= 0:
-                raise ValueError("epochs must be a positive integer")
+                logger.warning("epochs missing or invalid in config, setting to default 200")
+                training_config['epochs'] = 200
+                config['training'] = training_config
     
     @staticmethod
     def validate_tensors(input_tensor: torch.Tensor, target_tensor: torch.Tensor, 

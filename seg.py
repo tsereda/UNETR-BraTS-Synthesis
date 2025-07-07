@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Super Simple BraTS Segmentation - No JSON needed!
+Super Simple BraTS Segmentation - Fixed file detection!
 Just scans your data and runs segmentation with W&B logging.
 """
 
@@ -34,12 +34,17 @@ def find_brats_cases(data_dir, max_cases=10):
             case_path = os.path.join(data_dir, item)
             files = os.listdir(case_path)
             
-            # Find the modality files
-            flair = next((f for f in files if 'flair' in f and f.endswith('.nii.gz')), None)
-            t1ce = next((f for f in files if 't1ce' in f and f.endswith('.nii.gz')), None)
-            t1 = next((f for f in files if f.endswith('_t1.nii.gz')), None)
-            t2 = next((f for f in files if 't2' in f and f.endswith('.nii.gz')), None)
-            seg = next((f for f in files if 'seg' in f and f.endswith('.nii.gz')), None)
+            print(f"\nExamining case: {item}")
+            print(f"Files found: {files}")
+            
+            # BraTS 2023 GLI naming pattern: {case_id}-{modality}.nii.gz
+            flair = next((f for f in files if f.endswith('-t2f.nii.gz')), None)  # T2 FLAIR
+            t1ce = next((f for f in files if f.endswith('-t1c.nii.gz')), None)   # T1 contrast enhanced
+            t1 = next((f for f in files if f.endswith('-t1n.nii.gz')), None)     # T1 native
+            t2 = next((f for f in files if f.endswith('-t2w.nii.gz')), None)     # T2 weighted
+            seg = next((f for f in files if f.endswith('-seg.nii.gz')), None)    # Segmentation
+            
+            print(f"Found files - FLAIR: {flair}, T1CE: {t1ce}, T1: {t1}, T2: {t2}, SEG: {seg}")
             
             if all([flair, t1ce, t1, t2, seg]):
                 case_data = {
@@ -53,10 +58,19 @@ def find_brats_cases(data_dir, max_cases=10):
                     "case_id": item
                 }
                 cases.append(case_data)
-                print(f"Found case: {item}")
+                print(f"✓ Successfully added case: {item}")
                 
                 if len(cases) >= max_cases:
                     break
+            else:
+                print(f"✗ Missing files for case: {item}")
+                missing = []
+                if not flair: missing.append("FLAIR")
+                if not t1ce: missing.append("T1CE") 
+                if not t1: missing.append("T1")
+                if not t2: missing.append("T2")
+                if not seg: missing.append("SEG")
+                print(f"  Missing: {missing}")
     
     return cases
 
@@ -96,7 +110,7 @@ def log_segmentation_sample(image, label, prediction, case_name, epoch=None):
 
 def main():
     # Initialize W&B
-    wandb.init(project="BraTS-Simple-Seg", name="quick_test")
+    wandb.init(project="BraTS-Simple-Seg", name="quick_test_fixed")
     
     # Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -107,16 +121,28 @@ def main():
     base_dir = "/app/UNETR-BraTS-Synthesis"
     training_dir = os.path.join(base_dir, "ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData")
     
+    print(f"Scanning directory: {training_dir}")
+    print(f"Directory exists: {os.path.exists(training_dir)}")
+    
     cases = find_brats_cases(training_dir, max_cases=5)  # Just 5 cases for quick test
-    print(f"Found {len(cases)} cases")
+    print(f"\n=== SUMMARY ===")
+    print(f"Found {len(cases)} valid cases")
     
     if not cases:
         print("No BraTS cases found!")
+        print("Please check the file naming convention in your BraTS directories.")
         return
     
     # Split into train/val (simple split)
-    train_cases = cases[:3]
-    val_cases = cases[3:]
+    if len(cases) >= 2:
+        train_cases = cases[:-1]  # All but last
+        val_cases = cases[-1:]   # Just last one
+    else:
+        train_cases = cases
+        val_cases = cases  # Use same for val if only 1 case
+    
+    print(f"Training cases: {len(train_cases)}")
+    print(f"Validation cases: {len(val_cases)}")
     
     # Transforms
     roi = (128, 128, 128)

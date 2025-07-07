@@ -521,15 +521,9 @@ class SegmentationTrainer(Trainer):
         
         for batch_idx, batch in enumerate(self.train_loader):
             inputs = batch['input'].to(self.device)
-            # For seg sanity, use one input channel as image, one as mask
-            # Here, use channel 0 as image, channel 1 as mask (if available)
-            # If not, use target as mask
-            if inputs.shape[1] > 1:
-                image = inputs[:, 0:1]
-                mask = inputs[:, 1:2]
-            else:
-                image = inputs
-                mask = batch['target'].to(self.device)
+            # For seg sanity, use all 4 input channels and target as mask
+            image = inputs  # Use all 4 channels as model expects
+            mask = batch['target'].to(self.device)  # Use target as mask
             
             self.optimizer.zero_grad()
             outputs = self.model(image)

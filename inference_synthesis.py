@@ -168,7 +168,7 @@ def main():
     """Main inference function"""
     # Configuration - UPDATE THESE PATHS
     model_path = "./model.pt"  # Path to trained model
-    data_dir = "/path/to/your/data/BRATS/validation"  # Path to validation data
+    data_dir = "ASNR-MICCAI-BraTS2023-GLI-Challenge-ValidationData"  # Path to validation data
     output_dir = "./inference_results"  # Where to save results
     
     # Test case to run inference on

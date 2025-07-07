@@ -321,8 +321,8 @@ if __name__ == "__main__":
     print("Working directory:", root_dir)
 
     # Dataset configuration - UPDATE THESE PATHS
-    data_dir = "/path/to/your/data/BRATS"  # Update this path
-    json_list = "/path/to/your/brats_synthesis_data.json"  # Update this path
+    data_dir = "ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData"  # Update this path
+    json_list = "brats_synthesis_data.json"  # Update this path
     
     # Training configuration
     roi = (128, 128, 128)

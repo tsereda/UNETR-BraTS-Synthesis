@@ -114,7 +114,7 @@ def generate_brats_synthesis_json(data_root, output_file="brats_synthesis_data.j
 
 if __name__ == "__main__":
     # Update this path to your data directory
-    data_root = "/path/to/your/data/BRATS"
+    data_root = "ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData"
     
     # Generate the JSON file
     json_file = generate_brats_synthesis_json(data_root)

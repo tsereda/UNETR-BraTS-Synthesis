@@ -142,6 +142,7 @@ class SegmentationTrainer(Trainer):
         # Training state
         self.current_epoch = 0
         self.best_val_loss = float('inf')
+        self.global_step = 0  # Monotonically increasing global step for wandb
         
         # Setup logging
         self._setup_logging()
@@ -295,6 +296,7 @@ class SegmentationTrainer(Trainer):
                 loss_components[key] += value.item()
 
             num_batches += 1
+            self.global_step += 1  # Increment global step once per batch
 
             # Log batch metrics
             if batch_idx % self.config.get('logging', {}).get('log_frequency', 100) == 0:
@@ -303,17 +305,12 @@ class SegmentationTrainer(Trainer):
 
                 # Log to W&B during training for more frequent updates
                 if self.use_wandb:
-                    global_step = self.current_epoch * len(self.train_loader) + batch_idx
-                    # Ensure step is always >= 1 and never 0
-                    wandb_step = max(global_step + 1, 1)
-                    # Do not log to step 0 under any circumstances
-                    if wandb_step > 0:
-                        wandb.log({
-                            'batch/train_loss': total_loss_batch.item(),
-                            'batch/epoch': self.current_epoch,
-                            'batch/learning_rate': self.optimizer.param_groups[0]['lr'],
-                            'batch/global_step': global_step
-                        }, step=wandb_step)
+                    wandb.log({
+                        'batch/train_loss': total_loss_batch.item(),
+                        'batch/epoch': self.current_epoch,
+                        'batch/learning_rate': self.optimizer.param_groups[0]['lr'],
+                        'batch/global_step': self.global_step
+                    }, step=self.global_step)
 
             # Log sample predictions to W&B every 100 batches
             if self.use_wandb and batch_idx % 100 == 0:
@@ -399,12 +396,11 @@ class SegmentationTrainer(Trainer):
             
             # Log training metrics every epoch
             if self.use_wandb:
-                epoch_step = (epoch + 1) * len(self.train_loader)
                 wandb.log({
                     'epoch': epoch,
                     'train/epoch_loss': train_metrics['total_loss'],
                     'train/learning_rate': self.optimizer.param_groups[0]['lr']
-                }, step=epoch_step)
+                }, step=self.global_step)
             
             print(f"Epoch {epoch}/{epochs} - Train Loss: {train_metrics['total_loss']:.6f}")
             
@@ -432,7 +428,7 @@ class SegmentationTrainer(Trainer):
                 
                 if self.use_wandb:
                     # Log basic metrics
-                    validation_step = (epoch + 1) * len(self.train_loader)
+                    self.global_step += 1
                     log_dict = {
                         'epoch': epoch,
                         'train/total_loss': train_metrics['total_loss'],
@@ -442,17 +438,14 @@ class SegmentationTrainer(Trainer):
                         'val/is_best': is_best,
                         'patience_counter': patience_counter
                     }
-                    
                     # Log detailed loss components
                     for k, v in train_metrics.items():
                         if k != 'total_loss':
                             log_dict[f'train/{k}'] = v
-                    
                     for k, v in val_metrics.items():
                         if k != 'total_loss':
                             log_dict[f'val/{k}'] = v
-                    
-                    wandb.log(log_dict, step=validation_step)
+                    wandb.log(log_dict, step=self.global_step)
                 
                 # Log sample predictions every 20 epochs (more frequent)
                 if self.use_wandb and epoch % 20 == 0:
@@ -520,9 +513,9 @@ class SegmentationTrainer(Trainer):
             stacked = np.stack([input_slice, output_slice, target_slice], axis=-1)
             caption = f"{subject_names[i] if isinstance(subject_names, list) else i} (input/output/target)"
             images.append(wandb.Image(stacked, caption=caption))
-        # Log at a step >= 1, matching the epoch's last batch step
-        wandb_step = max((self.current_epoch + 1) * len(self.train_loader), 1)
-        wandb.log({"sample_predictions": images}, step=wandb_step)
+        # Log at a strictly increasing global step
+        self.global_step += 1
+        wandb.log({"sample_predictions": images}, step=self.global_step)
         self.model.train()
 
     # ...existing code...

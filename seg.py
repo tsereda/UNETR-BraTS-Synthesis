@@ -73,9 +73,11 @@ def find_brats_cases(data_dir):
                 }
                 cases.append(case_data)
                 
-                if len(cases) % 100 == 0:
+                # Progress update every 50 cases instead of 100
+                if len(cases) % 50 == 0:
                     print(f"Found {len(cases)} valid cases so far...")
     
+    print(f"Finished scanning. Total cases found: {len(cases)}")
     return cases
 
 
@@ -178,6 +180,45 @@ def val_epoch(model, loader, epoch, acc_func, model_inferer, post_sigmoid, post_
     return run_acc.avg
 
 
+def log_training_samples(model, val_loader, val_cases, model_inferer, post_sigmoid, post_pred, epoch, num_samples=3):
+    """Log segmentation samples during training"""
+    model.eval()
+    with torch.no_grad():
+        for idx, batch_data in enumerate(val_loader):
+            if idx >= num_samples:  # Log more samples for better monitoring
+                break
+                
+            data, target = batch_data["image"].cuda(), batch_data["label"].cuda()
+            logits = model_inferer(data)
+            
+            # Convert prediction for visualization
+            pred_sigmoid = post_sigmoid(logits)
+            pred_discrete = post_pred(pred_sigmoid)
+            
+            pred = pred_discrete[0].cpu().numpy()
+            pred_viz = np.zeros((pred.shape[1], pred.shape[2], pred.shape[3]))
+            pred_viz[pred[1] == 1] = 2  # ED
+            pred_viz[pred[0] == 1] = 1  # TC  
+            pred_viz[pred[2] == 1] = 4  # ET
+            
+            # Get original label
+            label_viz = target[0].cpu().numpy()
+            label_orig = np.zeros((label_viz.shape[1], label_viz.shape[2], label_viz.shape[3]))
+            label_orig[label_viz[1] == 1] = 2
+            label_orig[label_viz[0] == 1] = 1
+            label_orig[label_viz[2] == 1] = 4
+            
+            # Log to W&B
+            case_name = val_cases[idx]["case_id"]
+            log_segmentation_sample(
+                data[0].cpu().numpy(), 
+                label_orig, 
+                pred_viz, 
+                case_name, 
+                epoch
+            )
+
+
 def main():
     # Initialize W&B
     wandb.init(project="BraTS-Simple-Seg", name="simple_full_training")
@@ -186,7 +227,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
-    # Find all BraTS cases
+    # Find all BraTS cases - NO ARTIFICIAL LIMITS
     print("Looking for BraTS data...")
     base_dir = "/app/UNETR-BraTS-Synthesis"
     training_dir = os.path.join(base_dir, "ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData")
@@ -209,6 +250,13 @@ def main():
     
     print(f"Training cases: {len(train_cases)}")
     print(f"Validation cases: {len(val_cases)}")
+    
+    # Log dataset info to W&B
+    wandb.log({
+        "dataset/total_cases": len(cases),
+        "dataset/train_cases": len(train_cases),
+        "dataset/val_cases": len(val_cases)
+    })
     
     # Transforms
     roi = (128, 128, 128)
@@ -278,12 +326,15 @@ def main():
     
     # Training setup
     max_epochs = 50
-    val_every = 5
+    val_every = 2  # Validate every 2 epochs instead of 5
+    sample_log_every = 1  # Log samples every epoch
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_epochs)
     
-    print(f"Training for {max_epochs} epochs, validation every {val_every} epochs")
+    print(f"Training for {max_epochs} epochs")
+    print(f"Validation every {val_every} epochs")
+    print(f"Sample logging every {sample_log_every} epochs")
     
     val_acc_max = 0.0
     
@@ -306,6 +357,27 @@ def main():
             "loss: {:.4f}".format(train_loss),
             "time {:.2f}s".format(time.time() - epoch_time),
         )
+        
+        # Log training loss every epoch
+        wandb.log({
+            "epoch": epoch,
+            "train_loss": train_loss,
+            "learning_rate": optimizer.param_groups[0]['lr']
+        })
+        
+        # Log segmentation samples more frequently
+        if (epoch + 1) % sample_log_every == 0 or epoch == 0:
+            print("Logging segmentation samples...")
+            log_training_samples(
+                model=model,
+                val_loader=val_loader,
+                val_cases=val_cases,
+                model_inferer=model_inferer,
+                post_sigmoid=post_sigmoid,
+                post_pred=post_pred,
+                epoch=epoch,
+                num_samples=3  # Log 3 samples each time
+            )
         
         # Validation
         if (epoch + 1) % val_every == 0 or epoch == 0:
@@ -339,56 +411,18 @@ def main():
                 ", time {:.2f}s".format(time.time() - epoch_time),
             )
             
-            # Log to W&B
+            # Log validation metrics to W&B
             wandb.log({
-                "epoch": epoch,
-                "train_loss": train_loss,
                 "val_dice_tc": dice_tc,
                 "val_dice_wt": dice_wt,
                 "val_dice_et": dice_et,
                 "val_dice_avg": val_avg_acc
             })
             
-            # Log segmentation samples
-            model.eval()
-            with torch.no_grad():
-                for idx, batch_data in enumerate(val_loader):
-                    if idx >= 2:  # Only log first 2 validation samples
-                        break
-                        
-                    data, target = batch_data["image"].cuda(), batch_data["label"].cuda()
-                    logits = model_inferer(data)
-                    
-                    # Convert prediction for visualization
-                    pred_sigmoid = post_sigmoid(logits)
-                    pred_discrete = post_pred(pred_sigmoid)
-                    
-                    pred = pred_discrete[0].cpu().numpy()
-                    pred_viz = np.zeros((pred.shape[1], pred.shape[2], pred.shape[3]))
-                    pred_viz[pred[1] == 1] = 2  # ED
-                    pred_viz[pred[0] == 1] = 1  # TC  
-                    pred_viz[pred[2] == 1] = 4  # ET
-                    
-                    # Get original label
-                    label_viz = target[0].cpu().numpy()
-                    label_orig = np.zeros((label_viz.shape[1], label_viz.shape[2], label_viz.shape[3]))
-                    label_orig[label_viz[1] == 1] = 2
-                    label_orig[label_viz[0] == 1] = 1
-                    label_orig[label_viz[2] == 1] = 4
-                    
-                    # Log to W&B
-                    case_name = val_cases[idx]["case_id"]
-                    log_segmentation_sample(
-                        data[0].cpu().numpy(), 
-                        label_orig, 
-                        pred_viz, 
-                        case_name, 
-                        epoch
-                    )
-            
             if val_avg_acc > val_acc_max:
                 print("new best ({:.6f} --> {:.6f}). ".format(val_acc_max, val_avg_acc))
                 val_acc_max = val_avg_acc
+                wandb.log({"best_val_dice_avg": val_acc_max})
                 
         scheduler.step()
     

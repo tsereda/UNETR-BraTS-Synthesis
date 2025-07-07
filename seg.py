@@ -20,7 +20,7 @@ from monai.transforms import AsDiscrete, Activations
 from monai.metrics import DiceMetric
 from monai.utils.enums import MetricReduction
 from monai.networks.nets import SwinUNETR
-from monai import data
+from monai.data import Dataset, DataLoader  # Changed this line
 from monai.data import decollate_batch
 
 
@@ -162,12 +162,12 @@ def main():
         transforms.NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
     ])
     
-    # Data loaders
-    train_ds = data.Dataset(data=train_cases, transform=train_transform)
-    train_loader = data.DataLoader(train_ds, batch_size=1, shuffle=True, num_workers=2)
+    # Data loaders - Fixed the issue here
+    train_ds = Dataset(data=train_cases, transform=train_transform)
+    train_loader = DataLoader(train_ds, batch_size=1, shuffle=True, num_workers=2)
     
-    val_ds = data.Dataset(data=val_cases, transform=val_transform)
-    val_loader = data.DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=2)
+    val_ds = Dataset(data=val_cases, transform=val_transform)
+    val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=2)
     
     print(f"Training batches: {len(train_loader)}, Validation batches: {len(val_loader)}")
     

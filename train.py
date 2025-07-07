@@ -1,3 +1,5 @@
+import matplotlib.pyplot as plt
+import random
 #!/usr/bin/env python3
 """
 Training script for UNETR-based BraTS synthesis model.
@@ -31,6 +33,87 @@ except ImportError as e:
 
 
 class Trainer:
+
+    def visualize_batch(self, num_samples: int = 2, phase: str = 'train'):
+        """Visualize a batch of data (inputs and targets) for sanity check."""
+        loader = self.train_loader if phase == 'train' else self.val_loader
+        batch = next(iter(loader))
+        inputs = batch['input'][:num_samples]
+        targets = batch['target'][:num_samples]
+        subject_names = batch.get('subject_name', [f'sample_{i}' for i in range(num_samples)])
+        # Plot middle slice for each sample and channel
+        for i in range(num_samples):
+            fig, axs = plt.subplots(1, inputs.shape[1] + 1, figsize=(16, 4))
+            for c in range(inputs.shape[1]):
+                img = inputs[i, c].cpu().numpy()
+                mid = img.shape[-1] // 2
+                axs[c].imshow(img[..., mid], cmap='gray')
+                axs[c].set_title(f'Input ch{c}')
+                axs[c].axis('off')
+            tgt = targets[i, 0].cpu().numpy()
+            mid = tgt.shape[-1] // 2
+            axs[-1].imshow(tgt[..., mid], cmap='hot')
+            axs[-1].set_title('Target')
+            axs[-1].axis('off')
+            plt.suptitle(f'Subject: {subject_names[i]}')
+            plt.show()
+
+class SegmentationTrainer(Trainer):
+    """Trainer for segmentation sanity check."""
+    def _create_model(self) -> nn.Module:
+        # Use UNETR backbone for segmentation (out_channels = num_classes)
+        seg_config = self.config.copy()
+        seg_config['model'] = seg_config.get('model', {}).copy()
+        seg_config['model']['out_channels'] = 1  # binary seg for quick test
+        from models.unetr_synthesis import create_model
+        model = create_model(seg_config)
+        return model.to(self.device)
+
+    def _create_loss(self) -> nn.Module:
+        # Use Dice loss for segmentation
+        from monai.losses import DiceLoss
+        return DiceLoss(sigmoid=True, reduction='mean').to(self.device)
+
+    def train_epoch(self) -> Dict[str, float]:
+        self.model.train()
+        total_loss = 0.0
+        num_batches = 0
+        for batch_idx, batch in enumerate(self.train_loader):
+            inputs = batch['input'].to(self.device)
+            # For seg sanity, use one input channel as image, one as mask
+            # Here, use channel 0 as image, channel 1 as mask (if available)
+            # If not, use target as mask
+            if inputs.shape[1] > 1:
+                image = inputs[:, 0:1]
+                mask = inputs[:, 1:2]
+            else:
+                image = inputs
+                mask = batch['target'].to(self.device)
+            self.optimizer.zero_grad()
+            outputs = self.model(image)
+            loss = self.criterion(outputs, mask)
+            loss.backward()
+            self.optimizer.step()
+            total_loss += loss.item()
+            num_batches += 1
+            if batch_idx == 0:
+                # Visualize prediction vs mask
+                pred = torch.sigmoid(outputs[0, 0]).detach().cpu().numpy()
+                msk = mask[0, 0].detach().cpu().numpy()
+                mid = pred.shape[-1] // 2
+                plt.figure(figsize=(8, 4))
+                plt.subplot(1, 2, 1)
+                plt.imshow(pred[..., mid], cmap='Blues')
+                plt.title('Predicted mask')
+                plt.axis('off')
+                plt.subplot(1, 2, 2)
+                plt.imshow(msk[..., mid], cmap='Reds')
+                plt.title('GT mask')
+                plt.axis('off')
+                plt.show()
+        avg_loss = total_loss / num_batches
+        return {'total_loss': avg_loss}
+
     """Trainer class for UNETR synthesis model."""
     
     def __init__(self, config: Dict[str, Any], exp_name: str):
@@ -486,8 +569,11 @@ def main():
         config.setdefault('logging', {})
         config['logging']['use_wandb'] = True
     
-    # Create trainer and start training
-    trainer = Trainer(config, args.exp_name)
+    # For sanity check, use SegmentationTrainer instead of Trainer
+    trainer = SegmentationTrainer(config, args.exp_name)
+    # Visualize a batch before training
+    print("Visualizing a batch for sanity check...")
+    trainer.visualize_batch(num_samples=2, phase='train')
     trainer.train()
 
 

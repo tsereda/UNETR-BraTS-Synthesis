@@ -168,13 +168,13 @@ class Trainer:
             if entity_name:
                 wandb_config['entity'] = entity_name
             wandb.init(**wandb_config)
-            # Log additional system info at the first step (step=1, not 0)
+            # Log additional system info at the first step (step=0)
             wandb.log({
                 "system/gpu_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
                 "system/model_parameters": sum(p.numel() for p in self.model.parameters()),
                 "system/trainable_parameters": sum(p.numel() for p in self.model.parameters() if p.requires_grad),
                 "system/device": str(self.device)
-            }, step=1)
+            }, step=0)
             self._wandb_first_log = True
             self.use_wandb = True
             print(f"W&B logging enabled. Project: {project_name}")
@@ -221,8 +221,8 @@ class Trainer:
                 # Log to W&B during training for more frequent updates
                 if self.use_wandb:
                     global_step = self.current_epoch * len(self.train_loader) + batch_idx
-                    # Avoid logging to step 0 if already logged system info at step 1
-                    wandb_step = max(global_step, 1)
+                    # Always log to step >= 1 for batches (never step 0)
+                    wandb_step = global_step + 1
                     wandb.log({
                         'batch/train_loss': total_loss_batch.item(),
                         'batch/epoch': self.current_epoch,

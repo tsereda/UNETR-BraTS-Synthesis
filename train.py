@@ -398,51 +398,42 @@ class Trainer:
     
     def log_sample_predictions(self, num_samples: int = 2):
         """Log sample predictions to W&B for visualization."""
-        if not self.use_wandb:
+        if not getattr(self, 'use_wandb', False):
             return
-        
+        import wandb
+        import numpy as np
         self.model.eval()
+        # Get a batch from validation loader (or train loader if val not available)
+        loader = self.val_loader if hasattr(self, 'val_loader') and self.val_loader is not None else self.train_loader
+        try:
+            batch = next(iter(loader))
+        except Exception:
+            return
+        inputs = batch['input'][:num_samples].to(self.device)
+        targets = batch['target'][:num_samples].to(self.device)
+        subject_names = batch.get('subject_name', [f'sample_{i}' for i in range(num_samples)])
         with torch.no_grad():
-            for i, batch in enumerate(self.val_loader):
-                if i >= num_samples:
-                    break
-                
-                inputs = batch['input'].to(self.device)
-                targets = batch['target'].to(self.device)
-                outputs = self.model(inputs)
-                
-                # Take the first sample from the batch
-                input_sample = inputs[0].cpu().numpy()
-                target_sample = targets[0].cpu().numpy()
-                output_sample = outputs[0].cpu().numpy()
-                
-                # Log each modality and the prediction
-                images = []
-                
-                # Log input modalities (middle slice)
-                modality_names = self.config.get('data', {}).get('modalities', ['t1n', 't1c', 't2w', 't2f'])
-                mid_slice = input_sample.shape[-1] // 2
-                
-                for mod_idx, mod_name in enumerate(modality_names):
-                    if mod_idx < input_sample.shape[0]:
-                        images.append(wandb.Image(
-                            input_sample[mod_idx, :, :, mid_slice],
-                            caption=f"Input {mod_name} - Sample {i+1}"
-                        ))
-                
-                # Log target and prediction
-                images.append(wandb.Image(
-                    target_sample[0, :, :, mid_slice],
-                    caption=f"Target - Sample {i+1}"
-                ))
-                images.append(wandb.Image(
-                    output_sample[0, :, :, mid_slice],
-                    caption=f"Prediction - Sample {i+1}"
-                ))
-                
-                prediction_step = (self.current_epoch + 1) * len(self.train_loader)
-                wandb.log({f"sample_predictions_epoch_{self.current_epoch}": images}, step=prediction_step)
-        
+            outputs = self.model(inputs)
+        # Convert tensors to numpy for visualization
+        inputs_np = inputs.cpu().numpy()
+        targets_np = targets.cpu().numpy()
+        outputs_np = outputs.cpu().numpy()
+        # For each sample, log a middle slice of the volume
+        images = []
+        for i in range(min(num_samples, inputs_np.shape[0])):
+            # Take the middle slice along the last axis (axial view)
+            input_img = inputs_np[i, 0]  # first channel
+            target_img = targets_np[i, 0]
+            output_img = outputs_np[i, 0]
+            mid_slice = input_img.shape[-1] // 2
+            input_slice = input_img[..., mid_slice]
+            target_slice = target_img[..., mid_slice]
+            output_slice = output_img[..., mid_slice]
+            # Stack input, output, target for comparison
+            stacked = np.stack([input_slice, output_slice, target_slice], axis=-1)
+            caption = f"{subject_names[i] if isinstance(subject_names, list) else i} (input/output/target)"
+            images.append(wandb.Image(stacked, caption=caption))
+        wandb.log({"sample_predictions": images}, step=self.current_epoch)
         self.model.train()
 
     # ...existing code...

@@ -437,7 +437,9 @@ class Trainer:
             stacked = np.stack([input_slice, output_slice, target_slice], axis=-1)
             caption = f"{subject_names[i] if isinstance(subject_names, list) else i} (input/output/target)"
             images.append(wandb.Image(stacked, caption=caption))
-        wandb.log({"sample_predictions": images}, step=self.current_epoch)
+        # Log at a step >= 1, matching the epoch's last batch step
+        wandb_step = max((self.current_epoch + 1) * len(self.train_loader), 1)
+        wandb.log({"sample_predictions": images}, step=wandb_step)
         self.model.train()
 
     # ...existing code...

@@ -155,32 +155,26 @@ class Trainer:
     def _setup_logging(self):
         """Setup logging with wandb if enabled."""
         logging_config = self.config.get('logging', {})
-        
         if logging_config.get('use_wandb', False):
             # Use environment variables if available, otherwise fall back to config
             project_name = os.getenv('WANDB_PROJECT', logging_config.get('project_name', 'unetr-brats-synthesis'))
             entity_name = os.getenv('WANDB_ENTITY', None)
-            
             wandb_config = {
                 'project': project_name,
                 'name': self.exp_name,
                 'config': self.config,
                 'tags': logging_config.get('tags', [])
             }
-            
             if entity_name:
                 wandb_config['entity'] = entity_name
-            
             wandb.init(**wandb_config)
-            
-            # Log additional system info
+            # Log additional system info at the first step (step=1, not 0)
             wandb.log({
                 "system/gpu_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
                 "system/model_parameters": sum(p.numel() for p in self.model.parameters()),
                 "system/trainable_parameters": sum(p.numel() for p in self.model.parameters() if p.requires_grad),
                 "system/device": str(self.device)
-            }, step=0)
-            
+            }, step=1)
             self.use_wandb = True
             print(f"W&B logging enabled. Project: {project_name}")
         else:
@@ -429,6 +423,14 @@ class Trainer:
             input_slice = input_img[..., mid_slice]
             target_slice = target_img[..., mid_slice]
             output_slice = output_img[..., mid_slice]
+            # Normalize to [0, 255] for wandb.Image (uint8)
+            def norm255(x):
+                x = x.astype(np.float32)
+                x = (x - x.min()) / (x.max() - x.min() + 1e-8)
+                return (x * 255).astype(np.uint8)
+            input_slice = norm255(input_slice)
+            output_slice = norm255(output_slice)
+            target_slice = norm255(target_slice)
             # Stack input, output, target for comparison
             stacked = np.stack([input_slice, output_slice, target_slice], axis=-1)
             caption = f"{subject_names[i] if isinstance(subject_names, list) else i} (input/output/target)"

@@ -95,13 +95,13 @@ class BraTSDataset(Dataset):
             return subject_dirs[int(0.9 * len(subject_dirs)):]
     
     def _get_default_transforms(self):
-        """Get default MONAI transforms for preprocessing."""
+        """Get default MONAI transforms for preprocessing (no cropping, use native size)."""
         if not MONAI_AVAILABLE:
             return None
-        
+
         # Keys for each modality
         keys = [f"{mod}_image" for mod in self.modalities]
-        
+
         transforms = [
             LoadImaged(keys=keys),
             EnsureChannelFirstd(keys=keys),
@@ -114,10 +114,9 @@ class BraTSDataset(Dataset):
                 clip=True
             ),
         ]
-        
-        # Always crop to target volume size to ensure consistent input dimensions
-        transforms.append(CenterSpatialCropd(keys=keys, roi_size=self.volume_size))
-        
+
+        # NO cropping or resizing here!
+
         # Add augmentations for training
         if self.phase == 'train':
             transforms.extend([
@@ -128,12 +127,12 @@ class BraTSDataset(Dataset):
                 RandGaussianNoised(keys=keys, prob=0.1, std=0.01),
                 RandAdjustContrastd(keys=keys, prob=0.2, gamma=(0.8, 1.2)),
             ])
-        
+
         transforms.extend([
             ToTensord(keys=keys),
             EnsureTyped(keys=keys),
         ])
-        
+
         return Compose(transforms)
     
     def _validate_data(self):
@@ -271,55 +270,23 @@ class BraTSDataset(Dataset):
         return loaded_data
     
     def _preprocess_volume(self, volume: np.ndarray) -> np.ndarray:
-        """Basic preprocessing without MONAI."""
+        """Basic preprocessing without MONAI (no cropping, use native size)."""
         # Normalize to [-1, 1]
         volume = np.clip(volume, -1000, 1000)
         volume = 2.0 * (volume - (-1000)) / (1000 - (-1000)) - 1.0
-        
-        # Resize/crop to target size
-        volume = self._resize_volume(volume, self.volume_size)
-        
+        # NO resizing/cropping here!
         return volume
     
     def _resize_volume(self, volume: np.ndarray, target_size: Tuple[int, int, int]) -> np.ndarray:
-        """Resize volume to target size using center crop/pad."""
-        current_size = volume.shape
-        
-        # Calculate crop/pad amounts
-        crops = []
-        pads = []
-        
-        for i in range(3):
-            if current_size[i] > target_size[i]:
-                # Need to crop
-                crop_amount = current_size[i] - target_size[i]
-                crop_start = crop_amount // 2
-                crop_end = crop_start + target_size[i]
-                crops.append((crop_start, crop_end))
-                pads.append((0, 0))
-            else:
-                # Need to pad
-                pad_amount = target_size[i] - current_size[i]
-                pad_before = pad_amount // 2
-                pad_after = pad_amount - pad_before
-                pads.append((pad_before, pad_after))
-                crops.append((0, current_size[i]))
-        
-        # Apply crops
-        volume = volume[crops[0][0]:crops[0][1], 
-                       crops[1][0]:crops[1][1], 
-                       crops[2][0]:crops[2][1]]
-        
-        # Apply pads
-        volume = np.pad(volume, pads, mode='constant', constant_values=0)
-        
+        """No resizing/cropping. Just return the volume as is."""
         return volume
     
     def _get_dummy_sample(self, target_modality: str) -> Dict[str, torch.Tensor]:
-        """Get a dummy sample in case of errors."""
+        """Get a dummy sample in case of errors (no cropping, use default size 128x128x128)."""
+        dummy_shape = (128, 128, 128)
         return {
-            'input': torch.zeros(4, *self.volume_size),
-            'target': torch.zeros(1, *self.volume_size),
+            'input': torch.zeros(4, *dummy_shape),
+            'target': torch.zeros(1, *dummy_shape),
             'target_modality': target_modality,
             'subject_name': 'dummy'
         }

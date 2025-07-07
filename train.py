@@ -343,6 +343,7 @@ class BaseTrainer:
     def visualize_batch(self, num_samples: int = 2, phase: str = 'train'):
         """Visualize a batch of data (inputs and targets) for sanity check, and log to wandb if enabled."""
         try:
+            import numpy as np
             loader = self.train_loader if phase == 'train' else self.val_loader
             batch = next(iter(loader))
             inputs = batch['input'][:num_samples]
@@ -351,29 +352,35 @@ class BaseTrainer:
 
             images = []
             for i in range(num_samples):
-                fig, axs = plt.subplots(1, inputs.shape[1] + 1, figsize=(16, 4))
+                # Collect all input channels and target as slices
+                slices = []
                 for c in range(inputs.shape[1]):
                     img = inputs[i, c].cpu().numpy()
                     mid = img.shape[-1] // 2
-                    axs[c].imshow(img[..., mid], cmap='gray')
-                    axs[c].set_title(f'Input ch{c}')
-                    axs[c].axis('off')
+                    slices.append(img[..., mid])
                 tgt = targets[i, 0].cpu().numpy()
                 mid = tgt.shape[-1] // 2
-                axs[-1].imshow(tgt[..., mid], cmap='hot')
-                axs[-1].set_title('Target')
-                axs[-1].axis('off')
-                plt.suptitle(f'Subject: {subject_names[i]}')
-                fig.tight_layout()
-                # Save to buffer for wandb
+                slices.append(tgt[..., mid])
+                # Stack horizontally, normalize to [0,255] for wandb
+                def norm255(x):
+                    x = x.astype(np.float32)
+                    x = (x - x.min()) / (x.max() - x.min() + 1e-8)
+                    return (x * 255).astype(np.uint8)
+                slices_norm = [norm255(s) for s in slices]
+                # Make all slices the same shape (pad if needed)
+                max_shape = np.max([s.shape for s in slices_norm], axis=0)
+                slices_padded = [np.pad(s, [(0, max_shape[0]-s.shape[0]), (0, max_shape[1]-s.shape[1])], mode='constant') if s.shape != tuple(max_shape) else s for s in slices_norm]
+                comparison = np.concatenate(slices_padded, axis=1)
+                # Log to wandb as a single image
                 if self.use_wandb:
-                    import io
-                    buf = io.BytesIO()
-                    plt.savefig(buf, format='png')
-                    buf.seek(0)
-                    images.append(wandb.Image(buf, caption=f"{subject_names[i]} - batch visualization"))
+                    images.append(wandb.Image(comparison, caption=f"{subject_names[i]} - input(s) | target"))
+                # Also show locally
+                plt.figure(figsize=(16, 4))
+                plt.imshow(comparison, cmap='gray')
+                plt.title(f'Subject: {subject_names[i]} (inputs | target)')
+                plt.axis('off')
                 plt.show()
-                plt.close(fig)
+                plt.close()
 
             # Log to wandb if enabled
             if self.use_wandb and images:

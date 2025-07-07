@@ -71,7 +71,7 @@ class Trainer:
         print(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
 
     def visualize_batch(self, num_samples: int = 2, phase: str = 'train'):
-        """Visualize a batch of data (inputs and targets) for sanity check."""
+        """Visualize a batch of data (inputs and targets) for check."""
         loader = self.train_loader if phase == 'train' else self.val_loader
         batch = next(iter(loader))
         inputs = batch['input'][:num_samples]
@@ -498,7 +498,7 @@ class Trainer:
 
 
 class SegmentationTrainer(Trainer):
-    """Trainer for segmentation sanity check."""
+    """Trainer for segmentation check."""
     
     def _create_model(self) -> nn.Module:
         # Use UNETR backbone for segmentation (out_channels = num_classes)
@@ -521,7 +521,7 @@ class SegmentationTrainer(Trainer):
         
         for batch_idx, batch in enumerate(self.train_loader):
             inputs = batch['input'].to(self.device)
-            # For seg sanity, use all 4 input channels and target as mask
+            # For seg, use all 4 input channels and target as mask
             image = inputs  # Use all 4 channels as model expects
             mask = batch['target'].to(self.device)  # Use target as mask
             
@@ -555,6 +555,32 @@ class SegmentationTrainer(Trainer):
         avg_loss = total_loss / num_batches
         return {'total_loss': avg_loss}
 
+    def validate(self) -> Dict[str, float]:
+        """Validate the model - override to handle DiceLoss returning scalar."""
+        self.model.eval()
+        total_loss = 0.0
+        num_batches = 0
+        
+        with torch.no_grad():
+            for batch in self.val_loader:
+                # Move data to device
+                inputs = batch['input'].to(self.device)
+                targets = batch['target'].to(self.device)
+                
+                # Forward pass
+                outputs = self.model(inputs)
+                
+                # Compute loss (DiceLoss returns scalar, not dict)
+                loss = self.criterion(outputs, targets)
+                
+                # Accumulate losses
+                total_loss += loss.item()
+                num_batches += 1
+        
+        # Average losses
+        avg_loss = total_loss / num_batches
+        
+        return {'total_loss': avg_loss}
 
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from YAML file."""
@@ -599,7 +625,7 @@ def main():
         config.setdefault('logging', {})
         config['logging']['use_wandb'] = True
     
-    # For sanity check, use SegmentationTrainer instead of Trainer
+    # For check, use SegmentationTrainer instead of Trainer
     trainer = SegmentationTrainer(config, args.exp_name)
     
     # Visualize a batch before training

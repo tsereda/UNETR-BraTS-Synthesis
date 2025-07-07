@@ -221,14 +221,16 @@ class Trainer:
                 # Log to W&B during training for more frequent updates
                 if self.use_wandb:
                     global_step = self.current_epoch * len(self.train_loader) + batch_idx
-                    # Always log to step >= 1 for batches (never step 0)
-                    wandb_step = global_step + 1
-                    wandb.log({
-                        'batch/train_loss': total_loss_batch.item(),
-                        'batch/epoch': self.current_epoch,
-                        'batch/learning_rate': self.optimizer.param_groups[0]['lr'],
-                        'batch/global_step': global_step
-                    }, step=wandb_step)
+                    # Ensure step is always >= 1 and never 0
+                    wandb_step = max(global_step + 1, 1)
+                    # Do not log to step 0 under any circumstances
+                    if wandb_step > 0:
+                        wandb.log({
+                            'batch/train_loss': total_loss_batch.item(),
+                            'batch/epoch': self.current_epoch,
+                            'batch/learning_rate': self.optimizer.param_groups[0]['lr'],
+                            'batch/global_step': global_step
+                        }, step=wandb_step)
 
             # Log sample predictions to W&B every 100 batches
             if self.use_wandb and batch_idx % 100 == 0:

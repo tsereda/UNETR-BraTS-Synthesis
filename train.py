@@ -229,7 +229,9 @@ class Trainer:
                             val_log_data[f'val/{k}'] = v
                     wandb.log(val_log_data, step=self.global_step)
 
-                    if epoch % 20 == 0:  # Log images more frequently
+                    # Log sample predictions every log_frequency batches
+                    log_frequency = self.config.get('logging', {}).get('log_frequency', 25)
+                    if self.global_step % log_frequency == 0:
                         self.log_sample_predictions()
 
                 # Check for early stopping

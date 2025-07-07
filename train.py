@@ -351,20 +351,49 @@ class BaseTrainer:
             subject_names = batch.get('subject_name', [f'sample_{i}' for i in range(num_samples)])
 
             comparisons = []
+            max_slice_shape = None
+            # First, determine the maximum shape for all slices across all samples and channels
             for i in range(num_samples):
-                # Collect all input channels and target as slices (no cropping, use full 2D slice)
-                slices = []
                 for c in range(inputs.shape[1]):
                     img = inputs[i, c].cpu().numpy()
-                    # Use the full 2D slice at the middle index along the last axis
                     mid = img.shape[-1] // 2
-                    # Instead of cropping, just select the full 2D slice
                     if img.ndim == 3:
                         slice2d = img[:, :, mid]
                     elif img.ndim == 2:
                         slice2d = img
                     else:
                         raise ValueError(f"Unexpected input image ndim: {img.ndim}")
+                    if max_slice_shape is None:
+                        max_slice_shape = list(slice2d.shape)
+                    else:
+                        max_slice_shape[0] = max(max_slice_shape[0], slice2d.shape[0])
+                        max_slice_shape[1] = max(max_slice_shape[1], slice2d.shape[1])
+                tgt = targets[i, 0].cpu().numpy()
+                mid = tgt.shape[-1] // 2
+                if tgt.ndim == 3:
+                    tgt2d = tgt[:, :, mid]
+                elif tgt.ndim == 2:
+                    tgt2d = tgt
+                else:
+                    raise ValueError(f"Unexpected target image ndim: {tgt.ndim}")
+                max_slice_shape[0] = max(max_slice_shape[0], tgt2d.shape[0])
+                max_slice_shape[1] = max(max_slice_shape[1], tgt2d.shape[1])
+
+            for i in range(num_samples):
+                slices = []
+                for c in range(inputs.shape[1]):
+                    img = inputs[i, c].cpu().numpy()
+                    mid = img.shape[-1] // 2
+                    if img.ndim == 3:
+                        slice2d = img[:, :, mid]
+                    elif img.ndim == 2:
+                        slice2d = img
+                    else:
+                        raise ValueError(f"Unexpected input image ndim: {img.ndim}")
+                    # Pad each slice to max_slice_shape
+                    pad_h = max_slice_shape[0] - slice2d.shape[0]
+                    pad_w = max_slice_shape[1] - slice2d.shape[1]
+                    slice2d = np.pad(slice2d, [(0, pad_h), (0, pad_w)], mode='constant')
                     slices.append(slice2d)
                 tgt = targets[i, 0].cpu().numpy()
                 mid = tgt.shape[-1] // 2
@@ -374,6 +403,9 @@ class BaseTrainer:
                     tgt2d = tgt
                 else:
                     raise ValueError(f"Unexpected target image ndim: {tgt.ndim}")
+                pad_h = max_slice_shape[0] - tgt2d.shape[0]
+                pad_w = max_slice_shape[1] - tgt2d.shape[1]
+                tgt2d = np.pad(tgt2d, [(0, pad_h), (0, pad_w)], mode='constant')
                 slices.append(tgt2d)
                 # Normalize to [0,255]
                 def norm255(x):
@@ -381,10 +413,7 @@ class BaseTrainer:
                     x = (x - x.min()) / (x.max() - x.min() + 1e-8)
                     return (x * 255).astype(np.uint8)
                 slices_norm = [norm255(s) for s in slices]
-                # Make all slices the same shape (pad if needed)
-                max_shape = np.max([s.shape for s in slices_norm], axis=0)
-                slices_padded = [np.pad(s, [(0, max_shape[0]-s.shape[0]), (0, max_shape[1]-s.shape[1])], mode='constant') if s.shape != tuple(max_shape) else s for s in slices_norm]
-                comparison = np.concatenate(slices_padded, axis=1)
+                comparison = np.concatenate(slices_norm, axis=1)
                 comparisons.append(comparison)
                 # Also show locally
                 plt.figure(figsize=(16, 4))

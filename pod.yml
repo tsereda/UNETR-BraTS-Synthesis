@@ -96,13 +96,11 @@ spec:
           
           # python scripts/validate_data.py --data_root ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData
 
-          python scripts/download_pretrained.py --model brats_segmentation
+          # python scripts/download_pretrained.py --model brats_segmentation
 
 
           PYTHONUNBUFFERED=1 python train.py \
             --data_root ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData \
-            --config configs/unetr_base.yaml \
-            --exp_name brats_synthesis_v1 \
             --use_wandb
           
           tail -f /dev/null

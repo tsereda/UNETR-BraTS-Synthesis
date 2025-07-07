@@ -341,7 +341,7 @@ class BaseTrainer:
             self.use_wandb = False
     
     def visualize_batch(self, num_samples: int = 2, phase: str = 'train'):
-        """Visualize a batch of data (inputs and targets) for sanity check, and log to wandb if enabled."""
+        """Visualize a batch of data (inputs and targets) for sanity check, and log to wandb if enabled. Ensures all images are the same size for wandb logging."""
         try:
             import numpy as np
             loader = self.train_loader if phase == 'train' else self.val_loader
@@ -350,18 +350,32 @@ class BaseTrainer:
             targets = batch['target'][:num_samples]
             subject_names = batch.get('subject_name', [f'sample_{i}' for i in range(num_samples)])
 
-            images = []
+            comparisons = []
             for i in range(num_samples):
-                # Collect all input channels and target as slices
+                # Collect all input channels and target as slices (no cropping, use full 2D slice)
                 slices = []
                 for c in range(inputs.shape[1]):
                     img = inputs[i, c].cpu().numpy()
+                    # Use the full 2D slice at the middle index along the last axis
                     mid = img.shape[-1] // 2
-                    slices.append(img[..., mid])
+                    # Instead of cropping, just select the full 2D slice
+                    if img.ndim == 3:
+                        slice2d = img[:, :, mid]
+                    elif img.ndim == 2:
+                        slice2d = img
+                    else:
+                        raise ValueError(f"Unexpected input image ndim: {img.ndim}")
+                    slices.append(slice2d)
                 tgt = targets[i, 0].cpu().numpy()
                 mid = tgt.shape[-1] // 2
-                slices.append(tgt[..., mid])
-                # Stack horizontally, normalize to [0,255] for wandb
+                if tgt.ndim == 3:
+                    tgt2d = tgt[:, :, mid]
+                elif tgt.ndim == 2:
+                    tgt2d = tgt
+                else:
+                    raise ValueError(f"Unexpected target image ndim: {tgt.ndim}")
+                slices.append(tgt2d)
+                # Normalize to [0,255]
                 def norm255(x):
                     x = x.astype(np.float32)
                     x = (x - x.min()) / (x.max() - x.min() + 1e-8)
@@ -371,9 +385,7 @@ class BaseTrainer:
                 max_shape = np.max([s.shape for s in slices_norm], axis=0)
                 slices_padded = [np.pad(s, [(0, max_shape[0]-s.shape[0]), (0, max_shape[1]-s.shape[1])], mode='constant') if s.shape != tuple(max_shape) else s for s in slices_norm]
                 comparison = np.concatenate(slices_padded, axis=1)
-                # Log to wandb as a single image
-                if self.use_wandb:
-                    images.append(wandb.Image(comparison, caption=f"{subject_names[i]} - input(s) | target"))
+                comparisons.append(comparison)
                 # Also show locally
                 plt.figure(figsize=(16, 4))
                 plt.imshow(comparison, cmap='gray')
@@ -382,8 +394,12 @@ class BaseTrainer:
                 plt.show()
                 plt.close()
 
-            # Log to wandb if enabled
-            if self.use_wandb and images:
+            # Pad all comparison images to the same shape for wandb
+            if self.use_wandb and comparisons:
+                max_h = max([img.shape[0] for img in comparisons])
+                max_w = max([img.shape[1] for img in comparisons])
+                comparisons_padded = [np.pad(img, [(0, max_h-img.shape[0]), (0, max_w-img.shape[1])], mode='constant') if img.shape != (max_h, max_w) else img for img in comparisons]
+                images = [wandb.Image(img, caption=f"{subject_names[i]} - input(s) | target") for i, img in enumerate(comparisons_padded)]
                 current_step = self.step_tracker.get_global_step()
                 wandb.log({"batch_visualization": images}, step=current_step)
         except Exception as e:

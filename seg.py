@@ -42,9 +42,11 @@ class AverageMeter(object):
         self.avg = np.where(self.count > 0, self.sum / self.count, self.sum)
 
 
-def find_brats_cases(data_dir, max_cases=10):
+def find_brats_cases(data_dir, max_cases=None, verbose=False):
     """Find BraTS cases with flexible naming pattern detection"""
     cases = []
+    
+    print(f"Scanning {data_dir} for BraTS cases...")
     
     # Look for BraTS directories
     for item in os.listdir(data_dir):
@@ -52,8 +54,9 @@ def find_brats_cases(data_dir, max_cases=10):
             case_path = os.path.join(data_dir, item)
             files = os.listdir(case_path)
             
-            print(f"\nExamining case: {item}")
-            print(f"Files found: {files}")
+            if verbose:
+                print(f"\nExamining case: {item}")
+                print(f"Files found: {files}")
             
             # Try multiple naming patterns
             patterns = [
@@ -93,7 +96,8 @@ def find_brats_cases(data_dir, max_cases=10):
                 t2 = next((f for f in files if pattern['t2'](f)), None)
                 seg = next((f for f in files if pattern['seg'](f)), None)
                 
-                print(f"Pattern attempt - FLAIR: {flair}, T1CE: {t1ce}, T1: {t1}, T2: {t2}, SEG: {seg}")
+                if verbose:
+                    print(f"Pattern attempt - FLAIR: {flair}, T1CE: {t1ce}, T1: {t1}, T2: {t2}, SEG: {seg}")
                 
                 if all([flair, t1ce, t1, t2, seg]):
                     found_files = {
@@ -113,13 +117,16 @@ def find_brats_cases(data_dir, max_cases=10):
                     "case_id": item
                 }
                 cases.append(case_data)
-                print(f"✓ Successfully added case: {item}")
                 
-                if len(cases) >= max_cases:
+                if len(cases) % 100 == 0:  # Progress update every 100 cases
+                    print(f"Found {len(cases)} valid cases so far...")
+                
+                if max_cases is not None and len(cases) >= max_cases:
                     break
             else:
-                print(f"✗ Could not find all required files for case: {item}")
-                print(f"  Available files: {files}")
+                if verbose:
+                    print(f"✗ Could not find all required files for case: {item}")
+                    print(f"  Available files: {files}")
     
     return cases
 
@@ -160,7 +167,7 @@ def log_segmentation_sample(image, label, prediction, case_name, epoch=None):
         print(f"Error logging segmentation sample: {e}")
 
 
-def train_epoch(model, loader, optimizer, epoch, loss_func, max_epochs):
+def train_epoch(model, loader, optimizer, epoch, loss_func, max_epochs, batch_size):
     """Training epoch following notebook pattern"""
     model.train()
     start_time = time.time()
@@ -175,7 +182,7 @@ def train_epoch(model, loader, optimizer, epoch, loss_func, max_epochs):
         loss.backward()
         optimizer.step()
         
-        run_loss.update(loss.item(), n=data.shape[0])
+        run_loss.update(loss.item(), n=batch_size)
         print(
             "Epoch {}/{} {}/{}".format(epoch, max_epochs, idx, len(loader)),
             "loss: {:.4f}".format(run_loss.avg),
@@ -240,7 +247,16 @@ def main():
     print(f"Scanning directory: {training_dir}")
     print(f"Directory exists: {os.path.exists(training_dir)}")
     
-    cases = find_brats_cases(training_dir, max_cases=10)  # More cases for better training
+    # Option to limit cases for testing - set to None to use all cases
+    # For first run, you might want to set this to 50 to test everything works
+    TEST_MODE = False  # Set to True for quick testing with limited cases
+    max_cases_to_use = 50 if TEST_MODE else None
+    
+    if TEST_MODE:
+        print("⚠️  Running in TEST MODE - using only first 50 cases")
+        print("   Set TEST_MODE = False in the script to use all cases")
+    
+    cases = find_brats_cases(training_dir, max_cases=max_cases_to_use, verbose=TEST_MODE)
     print(f"\n=== SUMMARY ===")
     print(f"Found {len(cases)} valid cases")
     
@@ -288,12 +304,15 @@ def main():
         transforms.NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
     ])
     
-    # Data loaders
+    # Data loaders - adjust batch size and workers based on dataset size
+    batch_size = 2 if len(train_cases) > 100 else 1  # Larger batch for big datasets
+    num_workers = 8 if len(train_cases) > 100 else 4  # More workers for large datasets
+    
     train_ds = Dataset(data=train_cases, transform=train_transform)
-    train_loader = DataLoader(train_ds, batch_size=1, shuffle=True, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
     
     val_ds = Dataset(data=val_cases, transform=val_transform)
-    val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=num_workers, pin_memory=True)
     
     print(f"Training batches: {len(train_loader)}, Validation batches: {len(val_loader)}")
     
@@ -324,11 +343,20 @@ def main():
     )
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+    # Scheduler will be set after we know max_epochs
     
-    # Training loop
-    max_epochs = 10
-    val_every = 2
+    # Training parameters - adjust based on dataset size
+    if len(train_cases) > 100:
+        max_epochs = 50
+        val_every = 5
+        print(f"Large dataset detected ({len(train_cases)} cases) - using {max_epochs} epochs")
+    else:
+        max_epochs = 10
+        val_every = 2
+        print(f"Small dataset ({len(train_cases)} cases) - using {max_epochs} epochs")
+    
+    # Set up scheduler now that we know max_epochs
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_epochs)
     val_acc_max = 0.0
     
     for epoch in range(max_epochs):
@@ -342,7 +370,8 @@ def main():
             optimizer=optimizer,
             epoch=epoch,
             loss_func=dice_loss,
-            max_epochs=max_epochs
+            max_epochs=max_epochs,
+            batch_size=batch_size
         )
         
         print(

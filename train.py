@@ -341,7 +341,7 @@ class BaseTrainer:
             self.use_wandb = False
     
     def visualize_batch(self, num_samples: int = 2, phase: str = 'train'):
-        """Visualize a batch of data (inputs and targets) for sanity check, and log to wandb if enabled. Ensures all images are the same size for wandb logging."""
+        """Visualize a batch of data (inputs and targets) for sanity check, and log to wandb if enabled. Asserts all images are the same size."""
         try:
             import numpy as np
             loader = self.train_loader if phase == 'train' else self.val_loader
@@ -351,34 +351,8 @@ class BaseTrainer:
             subject_names = batch.get('subject_name', [f'sample_{i}' for i in range(num_samples)])
 
             comparisons = []
-            max_slice_shape = None
-            # First, determine the maximum shape for all slices across all samples and channels
-            for i in range(num_samples):
-                for c in range(inputs.shape[1]):
-                    img = inputs[i, c].cpu().numpy()
-                    mid = img.shape[-1] // 2
-                    if img.ndim == 3:
-                        slice2d = img[:, :, mid]
-                    elif img.ndim == 2:
-                        slice2d = img
-                    else:
-                        raise ValueError(f"Unexpected input image ndim: {img.ndim}")
-                    if max_slice_shape is None:
-                        max_slice_shape = list(slice2d.shape)
-                    else:
-                        max_slice_shape[0] = max(max_slice_shape[0], slice2d.shape[0])
-                        max_slice_shape[1] = max(max_slice_shape[1], slice2d.shape[1])
-                tgt = targets[i, 0].cpu().numpy()
-                mid = tgt.shape[-1] // 2
-                if tgt.ndim == 3:
-                    tgt2d = tgt[:, :, mid]
-                elif tgt.ndim == 2:
-                    tgt2d = tgt
-                else:
-                    raise ValueError(f"Unexpected target image ndim: {tgt.ndim}")
-                max_slice_shape[0] = max(max_slice_shape[0], tgt2d.shape[0])
-                max_slice_shape[1] = max(max_slice_shape[1], tgt2d.shape[1])
-
+            expected_shape = None
+            expected_num_channels = inputs.shape[1]
             for i in range(num_samples):
                 slices = []
                 for c in range(inputs.shape[1]):
@@ -390,10 +364,9 @@ class BaseTrainer:
                         slice2d = img
                     else:
                         raise ValueError(f"Unexpected input image ndim: {img.ndim}")
-                    # Pad each slice to max_slice_shape
-                    pad_h = max_slice_shape[0] - slice2d.shape[0]
-                    pad_w = max_slice_shape[1] - slice2d.shape[1]
-                    slice2d = np.pad(slice2d, [(0, pad_h), (0, pad_w)], mode='constant')
+                    if expected_shape is None:
+                        expected_shape = slice2d.shape
+                    assert slice2d.shape == expected_shape, f"Input slice shape mismatch: {slice2d.shape} vs {expected_shape}"
                     slices.append(slice2d)
                 tgt = targets[i, 0].cpu().numpy()
                 mid = tgt.shape[-1] // 2
@@ -403,9 +376,7 @@ class BaseTrainer:
                     tgt2d = tgt
                 else:
                     raise ValueError(f"Unexpected target image ndim: {tgt.ndim}")
-                pad_h = max_slice_shape[0] - tgt2d.shape[0]
-                pad_w = max_slice_shape[1] - tgt2d.shape[1]
-                tgt2d = np.pad(tgt2d, [(0, pad_h), (0, pad_w)], mode='constant')
+                assert tgt2d.shape == expected_shape, f"Target slice shape mismatch: {tgt2d.shape} vs {expected_shape}"
                 slices.append(tgt2d)
                 # Normalize to [0,255]
                 def norm255(x):
@@ -423,12 +394,13 @@ class BaseTrainer:
                 plt.show()
                 plt.close()
 
-            # Pad all comparison images to the same shape for wandb
+            # Assert all comparison images are the same shape
+            comp_shape = comparisons[0].shape
+            for comp in comparisons:
+                assert comp.shape == comp_shape, f"Comparison image shape mismatch: {comp.shape} vs {comp_shape}"
+
             if self.use_wandb and comparisons:
-                max_h = max([img.shape[0] for img in comparisons])
-                max_w = max([img.shape[1] for img in comparisons])
-                comparisons_padded = [np.pad(img, [(0, max_h-img.shape[0]), (0, max_w-img.shape[1])], mode='constant') if img.shape != (max_h, max_w) else img for img in comparisons]
-                images = [wandb.Image(img, caption=f"{subject_names[i]} - input(s) | target") for i, img in enumerate(comparisons_padded)]
+                images = [wandb.Image(img, caption=f"{subject_names[i]} - input(s) | target") for i, img in enumerate(comparisons)]
                 current_step = self.step_tracker.get_global_step()
                 wandb.log({"batch_visualization": images}, step=current_step)
         except Exception as e:

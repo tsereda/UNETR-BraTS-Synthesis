@@ -1,3 +1,5 @@
+import matplotlib.pyplot as plt
+import random
 #!/usr/bin/env python3
 """
 Training script for UNETR-based BraTS synthesis model.
@@ -31,6 +33,87 @@ except ImportError as e:
 
 
 class Trainer:
+
+    def visualize_batch(self, num_samples: int = 2, phase: str = 'train'):
+        """Visualize a batch of data (inputs and targets) for sanity check."""
+        loader = self.train_loader if phase == 'train' else self.val_loader
+        batch = next(iter(loader))
+        inputs = batch['input'][:num_samples]
+        targets = batch['target'][:num_samples]
+        subject_names = batch.get('subject_name', [f'sample_{i}' for i in range(num_samples)])
+        # Plot middle slice for each sample and channel
+        for i in range(num_samples):
+            fig, axs = plt.subplots(1, inputs.shape[1] + 1, figsize=(16, 4))
+            for c in range(inputs.shape[1]):
+                img = inputs[i, c].cpu().numpy()
+                mid = img.shape[-1] // 2
+                axs[c].imshow(img[..., mid], cmap='gray')
+                axs[c].set_title(f'Input ch{c}')
+                axs[c].axis('off')
+            tgt = targets[i, 0].cpu().numpy()
+            mid = tgt.shape[-1] // 2
+            axs[-1].imshow(tgt[..., mid], cmap='hot')
+            axs[-1].set_title('Target')
+            axs[-1].axis('off')
+            plt.suptitle(f'Subject: {subject_names[i]}')
+            plt.show()
+
+class SegmentationTrainer(Trainer):
+    """Trainer for segmentation sanity check."""
+    def _create_model(self) -> nn.Module:
+        # Use UNETR backbone for segmentation (out_channels = num_classes)
+        seg_config = self.config.copy()
+        seg_config['model'] = seg_config.get('model', {}).copy()
+        seg_config['model']['out_channels'] = 1  # binary seg for quick test
+        from models.unetr_synthesis import create_model
+        model = create_model(seg_config)
+        return model.to(self.device)
+
+    def _create_loss(self) -> nn.Module:
+        # Use Dice loss for segmentation
+        from monai.losses import DiceLoss
+        return DiceLoss(sigmoid=True, reduction='mean').to(self.device)
+
+    def train_epoch(self) -> Dict[str, float]:
+        self.model.train()
+        total_loss = 0.0
+        num_batches = 0
+        for batch_idx, batch in enumerate(self.train_loader):
+            inputs = batch['input'].to(self.device)
+            # For seg sanity, use one input channel as image, one as mask
+            # Here, use channel 0 as image, channel 1 as mask (if available)
+            # If not, use target as mask
+            if inputs.shape[1] > 1:
+                image = inputs[:, 0:1]
+                mask = inputs[:, 1:2]
+            else:
+                image = inputs
+                mask = batch['target'].to(self.device)
+            self.optimizer.zero_grad()
+            outputs = self.model(image)
+            loss = self.criterion(outputs, mask)
+            loss.backward()
+            self.optimizer.step()
+            total_loss += loss.item()
+            num_batches += 1
+            if batch_idx == 0:
+                # Visualize prediction vs mask
+                pred = torch.sigmoid(outputs[0, 0]).detach().cpu().numpy()
+                msk = mask[0, 0].detach().cpu().numpy()
+                mid = pred.shape[-1] // 2
+                plt.figure(figsize=(8, 4))
+                plt.subplot(1, 2, 1)
+                plt.imshow(pred[..., mid], cmap='Blues')
+                plt.title('Predicted mask')
+                plt.axis('off')
+                plt.subplot(1, 2, 2)
+                plt.imshow(msk[..., mid], cmap='Reds')
+                plt.title('GT mask')
+                plt.axis('off')
+                plt.show()
+        avg_loss = total_loss / num_batches
+        return {'total_loss': avg_loss}
+
     """Trainer class for UNETR synthesis model."""
     
     def __init__(self, config: Dict[str, Any], exp_name: str):
@@ -59,6 +142,7 @@ class Trainer:
         # Training state
         self.current_epoch = 0
         self.best_val_loss = float('inf')
+        self.global_step = 0  # Monotonically increasing global step for wandb
         
         # Setup logging
         self._setup_logging()
@@ -155,32 +239,27 @@ class Trainer:
     def _setup_logging(self):
         """Setup logging with wandb if enabled."""
         logging_config = self.config.get('logging', {})
-        
         if logging_config.get('use_wandb', False):
             # Use environment variables if available, otherwise fall back to config
             project_name = os.getenv('WANDB_PROJECT', logging_config.get('project_name', 'unetr-brats-synthesis'))
             entity_name = os.getenv('WANDB_ENTITY', None)
-            
             wandb_config = {
                 'project': project_name,
                 'name': self.exp_name,
                 'config': self.config,
                 'tags': logging_config.get('tags', [])
             }
-            
             if entity_name:
                 wandb_config['entity'] = entity_name
-            
             wandb.init(**wandb_config)
-            
-            # Log additional system info
-            wandb.log({
-                "system/gpu_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
-                "system/model_parameters": sum(p.numel() for p in self.model.parameters()),
-                "system/trainable_parameters": sum(p.numel() for p in self.model.parameters() if p.requires_grad),
-                "system/device": str(self.device)
-            }, step=0)
-            
+            # Log additional system info at the first step (step=1, not 0)
+            # Log additional system info at the first step (step=1, not 0)
+            # But do NOT log any metrics to step=0 or step=1, only use wandb.summary for static info
+            wandb.summary["system/gpu_count"] = torch.cuda.device_count() if torch.cuda.is_available() else 0
+            wandb.summary["system/model_parameters"] = sum(p.numel() for p in self.model.parameters())
+            wandb.summary["system/trainable_parameters"] = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+            wandb.summary["system/device"] = str(self.device)
+            self._wandb_first_log = True
             self.use_wandb = True
             print(f"W&B logging enabled. Project: {project_name}")
         else:
@@ -192,53 +271,55 @@ class Trainer:
         total_loss = 0.0
         loss_components = {}
         num_batches = 0
-        
         for batch_idx, batch in enumerate(self.train_loader):
             # Move data to device
             inputs = batch['input'].to(self.device)
             targets = batch['target'].to(self.device)
-            
+
             # Forward pass
             self.optimizer.zero_grad()
             outputs = self.model(inputs)
-            
+
             # Compute loss
             losses = self.criterion(outputs, targets)
             total_loss_batch = losses['total']
-            
+
             # Backward pass
             total_loss_batch.backward()
             self.optimizer.step()
-            
+
             # Accumulate losses
             total_loss += total_loss_batch.item()
             for key, value in losses.items():
                 if key not in loss_components:
                     loss_components[key] = 0.0
                 loss_components[key] += value.item()
-            
+
             num_batches += 1
-            
+            self.global_step += 1  # Increment global step once per batch
+
             # Log batch metrics
             if batch_idx % self.config.get('logging', {}).get('log_frequency', 100) == 0:
                 print(f"Batch {batch_idx}/{len(self.train_loader)}, "
                       f"Loss: {total_loss_batch.item():.6f}")
-                
+
                 # Log to W&B during training for more frequent updates
                 if self.use_wandb:
-                    global_step = self.current_epoch * len(self.train_loader) + batch_idx
                     wandb.log({
                         'batch/train_loss': total_loss_batch.item(),
                         'batch/epoch': self.current_epoch,
                         'batch/learning_rate': self.optimizer.param_groups[0]['lr'],
-                        'batch/global_step': global_step
-                    }, step=global_step)
-        
+                        'batch/global_step': self.global_step
+                    }, step=self.global_step)
+
+            # Log sample predictions to W&B every 100 batches
+            if self.use_wandb and batch_idx % 100 == 0:
+                if hasattr(self, 'log_sample_predictions'):
+                    self.log_sample_predictions()
         # Average losses
         avg_loss = total_loss / num_batches
         for key in loss_components:
             loss_components[key] /= num_batches
-        
         return {'total_loss': avg_loss, **loss_components}
     
     def validate(self) -> Dict[str, float]:
@@ -315,12 +396,11 @@ class Trainer:
             
             # Log training metrics every epoch
             if self.use_wandb:
-                epoch_step = (epoch + 1) * len(self.train_loader)
                 wandb.log({
                     'epoch': epoch,
                     'train/epoch_loss': train_metrics['total_loss'],
                     'train/learning_rate': self.optimizer.param_groups[0]['lr']
-                }, step=epoch_step)
+                }, step=self.global_step)
             
             print(f"Epoch {epoch}/{epochs} - Train Loss: {train_metrics['total_loss']:.6f}")
             
@@ -348,7 +428,7 @@ class Trainer:
                 
                 if self.use_wandb:
                     # Log basic metrics
-                    validation_step = (epoch + 1) * len(self.train_loader)
+                    self.global_step += 1
                     log_dict = {
                         'epoch': epoch,
                         'train/total_loss': train_metrics['total_loss'],
@@ -358,17 +438,14 @@ class Trainer:
                         'val/is_best': is_best,
                         'patience_counter': patience_counter
                     }
-                    
                     # Log detailed loss components
                     for k, v in train_metrics.items():
                         if k != 'total_loss':
                             log_dict[f'train/{k}'] = v
-                    
                     for k, v in val_metrics.items():
                         if k != 'total_loss':
                             log_dict[f'val/{k}'] = v
-                    
-                    wandb.log(log_dict, step=validation_step)
+                    wandb.log(log_dict, step=self.global_step)
                 
                 # Log sample predictions every 20 epochs (more frequent)
                 if self.use_wandb and epoch % 20 == 0:
@@ -393,51 +470,52 @@ class Trainer:
     
     def log_sample_predictions(self, num_samples: int = 2):
         """Log sample predictions to W&B for visualization."""
-        if not self.use_wandb:
+        if not getattr(self, 'use_wandb', False):
             return
-        
+        import wandb
+        import numpy as np
         self.model.eval()
+        # Get a batch from validation loader (or train loader if val not available)
+        loader = self.val_loader if hasattr(self, 'val_loader') and self.val_loader is not None else self.train_loader
+        try:
+            batch = next(iter(loader))
+        except Exception:
+            return
+        inputs = batch['input'][:num_samples].to(self.device)
+        targets = batch['target'][:num_samples].to(self.device)
+        subject_names = batch.get('subject_name', [f'sample_{i}' for i in range(num_samples)])
         with torch.no_grad():
-            for i, batch in enumerate(self.val_loader):
-                if i >= num_samples:
-                    break
-                
-                inputs = batch['input'].to(self.device)
-                targets = batch['target'].to(self.device)
-                outputs = self.model(inputs)
-                
-                # Take the first sample from the batch
-                input_sample = inputs[0].cpu().numpy()
-                target_sample = targets[0].cpu().numpy()
-                output_sample = outputs[0].cpu().numpy()
-                
-                # Log each modality and the prediction
-                images = []
-                
-                # Log input modalities (middle slice)
-                modality_names = self.config.get('data', {}).get('modalities', ['t1n', 't1c', 't2w', 't2f'])
-                mid_slice = input_sample.shape[-1] // 2
-                
-                for mod_idx, mod_name in enumerate(modality_names):
-                    if mod_idx < input_sample.shape[0]:
-                        images.append(wandb.Image(
-                            input_sample[mod_idx, :, :, mid_slice],
-                            caption=f"Input {mod_name} - Sample {i+1}"
-                        ))
-                
-                # Log target and prediction
-                images.append(wandb.Image(
-                    target_sample[0, :, :, mid_slice],
-                    caption=f"Target - Sample {i+1}"
-                ))
-                images.append(wandb.Image(
-                    output_sample[0, :, :, mid_slice],
-                    caption=f"Prediction - Sample {i+1}"
-                ))
-                
-                prediction_step = (self.current_epoch + 1) * len(self.train_loader)
-                wandb.log({f"sample_predictions_epoch_{self.current_epoch}": images}, step=prediction_step)
-        
+            outputs = self.model(inputs)
+        # Convert tensors to numpy for visualization
+        inputs_np = inputs.cpu().numpy()
+        targets_np = targets.cpu().numpy()
+        outputs_np = outputs.cpu().numpy()
+        # For each sample, log a middle slice of the volume
+        images = []
+        for i in range(min(num_samples, inputs_np.shape[0])):
+            # Take the middle slice along the last axis (axial view)
+            input_img = inputs_np[i, 0]  # first channel
+            target_img = targets_np[i, 0]
+            output_img = outputs_np[i, 0]
+            mid_slice = input_img.shape[-1] // 2
+            input_slice = input_img[..., mid_slice]
+            target_slice = target_img[..., mid_slice]
+            output_slice = output_img[..., mid_slice]
+            # Normalize to [0, 255] for wandb.Image (uint8)
+            def norm255(x):
+                x = x.astype(np.float32)
+                x = (x - x.min()) / (x.max() - x.min() + 1e-8)
+                return (x * 255).astype(np.uint8)
+            input_slice = norm255(input_slice)
+            output_slice = norm255(output_slice)
+            target_slice = norm255(target_slice)
+            # Stack input, output, target for comparison
+            stacked = np.stack([input_slice, output_slice, target_slice], axis=-1)
+            caption = f"{subject_names[i] if isinstance(subject_names, list) else i} (input/output/target)"
+            images.append(wandb.Image(stacked, caption=caption))
+        # Log at a strictly increasing global step
+        self.global_step += 1
+        wandb.log({"sample_predictions": images}, step=self.global_step)
         self.model.train()
 
     # ...existing code...
@@ -484,8 +562,11 @@ def main():
         config.setdefault('logging', {})
         config['logging']['use_wandb'] = True
     
-    # Create trainer and start training
-    trainer = Trainer(config, args.exp_name)
+    # For sanity check, use SegmentationTrainer instead of Trainer
+    trainer = SegmentationTrainer(config, args.exp_name)
+    # Visualize a batch before training
+    print("Visualizing a batch for sanity check...")
+    trainer.visualize_batch(num_samples=2, phase='train')
     trainer.train()
 
 

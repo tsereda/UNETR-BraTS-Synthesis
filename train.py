@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 """
-Training script for UNETR-based BraTS synthesis and segmentation models.
-
-This script handles training with support for transfer learning, mixed precision,
-and various optimization strategies. It includes a base `Trainer` for image synthesis
-and a `SegmentationTrainer` subclass for a segmentation sanity check.
+Simplified working training script for UNETR-based BraTS synthesis and segmentation models.
+Fixed wandb sample logging and debug output.
 """
 
 import os
@@ -34,7 +31,7 @@ except ImportError as e:
 
 
 class Trainer:
-    """Trainer class for UNETR synthesis model."""
+    """Simplified trainer class for UNETR synthesis model."""
 
     def __init__(self, config: Dict[str, Any], exp_name: str):
         self.config = config
@@ -62,14 +59,15 @@ class Trainer:
         # Training state
         self.current_epoch = 0
         self.best_val_loss = float('inf')
-        self.global_step = 0  # Monotonically increasing global step for wandb
+        self.global_step = 0
         
-        # Setup logging
+        # Setup wandb logging
         self.use_wandb = False
         self._setup_logging()
         
         print(f"Trainer initialized. Device: {self.device}")
         print(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
+        print(f"Using wandb: {self.use_wandb}")
 
     def _create_model(self) -> nn.Module:
         """Create and initialize the synthesis model."""
@@ -163,13 +161,6 @@ class Trainer:
                 wandb_config['entity'] = entity_name
                 
             wandb.init(**wandb_config)
-            
-            # Log static, step-independent info using wandb.summary
-            wandb.summary["system/gpu_count"] = torch.cuda.device_count()
-            wandb.summary["system/model_parameters"] = sum(p.numel() for p in self.model.parameters())
-            wandb.summary["system/trainable_parameters"] = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-            wandb.summary["system/device"] = str(self.device)
-            
             print(f"W&B logging enabled. Project: {project_name}")
 
     def train(self):
@@ -183,24 +174,21 @@ class Trainer:
         
         for epoch in range(self.current_epoch, epochs):
             self.current_epoch = epoch
+            print(f"\n=== Epoch {epoch}/{epochs} ===")
             
             # Train for one epoch
             train_metrics = self.train_epoch()
-            print(f"Epoch {epoch}/{epochs} - Train Loss: {train_metrics['total_loss']:.6f}")
+            print(f"Train Loss: {train_metrics['total_loss']:.6f}")
             
             # Log training metrics
             if self.use_wandb:
-                log_data = {
+                wandb.log({
                     'epoch': epoch,
-                    'train/epoch_loss': train_metrics['total_loss'],
+                    'train/loss': train_metrics['total_loss'],
                     'train/learning_rate': self.optimizer.param_groups[0]['lr']
-                }
-                for k, v in train_metrics.items():
-                    if k != 'total_loss':
-                        log_data[f'train/{k}'] = v
-                wandb.log(log_data, step=self.global_step)
+                }, step=self.global_step)
 
-            # Validate the model
+            # Validate and log samples
             if epoch % val_frequency == 0:
                 val_metrics = self.validate()
                 val_loss = val_metrics['total_loss']
@@ -214,27 +202,19 @@ class Trainer:
                 
                 self.save_checkpoint(is_best)
                 
-                print(f"  Validation Loss: {val_loss:.6f} (Best: {self.best_val_loss:.6f})")
+                print(f"Validation Loss: {val_loss:.6f} (Best: {self.best_val_loss:.6f})")
                 
-                # Log validation metrics and sample predictions
+                # Log validation metrics
                 if self.use_wandb:
-                    val_log_data = {
-                        'val/total_loss': val_loss,
+                    wandb.log({
+                        'val/loss': val_loss,
                         'val/best_loss': self.best_val_loss,
-                        'val/is_best': is_best,
-                        'patience_counter': patience_counter
-                    }
-                    for k, v in val_metrics.items():
-                        if k != 'total_loss':
-                            val_log_data[f'val/{k}'] = v
-                    wandb.log(val_log_data, step=self.global_step)
+                        'val/is_best': is_best
+                    }, step=self.global_step)
 
-                    # Log sample predictions every log_frequency batches
-                    log_frequency = self.config.get('logging', {}).get('log_frequency', 25)
-                    print(f"[DEBUG] global_step={self.global_step}, log_frequency={log_frequency}")
-                    if self.global_step % log_frequency == 0:
-                        print(f"[DEBUG] Logging sample predictions at global_step {self.global_step}")
-                        self.log_sample_predictions()
+                # Always log sample predictions during validation
+                print("Logging sample predictions...")
+                self.log_sample_predictions()
 
                 # Check for early stopping
                 if patience_counter >= early_stopping_patience:
@@ -244,7 +224,6 @@ class Trainer:
             # Update scheduler
             if self.scheduler:
                 if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                    # Step scheduler on validation loss if available
                     if 'val_loss' in locals():
                         self.scheduler.step(val_loss)
                 else:
@@ -255,10 +234,11 @@ class Trainer:
             wandb.finish()
 
     def train_epoch(self) -> Dict[str, float]:
-        """Train model for one epoch (synthesis task)."""
+        """Train model for one epoch."""
         self.model.train()
         total_loss = 0.0
         loss_components = {}
+        num_batches = len(self.train_loader)
         
         for batch_idx, batch in enumerate(self.train_loader):
             inputs = batch['input'].to(self.device)
@@ -271,27 +251,19 @@ class Trainer:
             total_loss_batch.backward()
             self.optimizer.step()
 
-            # Increment global step once per batch
             self.global_step += 1
-
-            # Accumulate losses for epoch average
             total_loss += total_loss_batch.item()
+            
+            # Accumulate loss components
             for key, value in losses.items():
                 loss_components.setdefault(key, 0.0)
                 loss_components[key] += value.item()
 
-            # Log batch metrics periodically to console and wandb
-            if batch_idx % self.config.get('logging', {}).get('log_frequency', 25) == 0:
-                print(f"  Batch {batch_idx}/{len(self.train_loader)}, Loss: {total_loss_batch.item():.6f}")
-                if self.use_wandb:
-                    wandb.log({
-                        'batch/train_loss': total_loss_batch.item(),
-                        'batch/epoch': self.current_epoch,
-                        'batch/learning_rate': self.optimizer.param_groups[0]['lr'],
-                    }, step=self.global_step)
+            # Print progress every 25 batches
+            if batch_idx % 25 == 0:
+                print(f"  Batch {batch_idx}/{num_batches}, Loss: {total_loss_batch.item():.6f}")
 
-        # Average losses over all batches in the epoch
-        num_batches = len(self.train_loader)
+        # Average losses
         avg_loss = total_loss / num_batches
         for key in loss_components:
             loss_components[key] /= num_batches
@@ -341,8 +313,106 @@ class Trainer:
             torch.save(checkpoint, self.exp_dir / 'best_model.pth')
             print(f"Saved new best model at epoch {self.current_epoch}")
 
+    def log_sample_predictions(self, num_samples: int = 2):
+        """Log sample predictions to W&B and console."""
+        print(f"DEBUG: Starting log_sample_predictions, use_wandb={self.use_wandb}")
+        
+        self.model.eval()
+        
+        # Get a batch from validation loader
+        try:
+            val_iter = iter(self.val_loader)
+            batch = next(val_iter)
+            print(f"DEBUG: Successfully loaded batch from val_loader")
+        except Exception as e:
+            print(f"DEBUG: Error loading batch: {e}")
+            return
+
+        # Process inputs and get predictions
+        with torch.no_grad():
+            inputs = batch['input'][:num_samples].to(self.device)
+            targets = batch['target'][:num_samples]
+            outputs = self.model(inputs).cpu()
+            
+        print(f"DEBUG: Generated predictions for {inputs.shape[0]} samples")
+        print(f"DEBUG: Input shape: {inputs.shape}, Target shape: {targets.shape}, Output shape: {outputs.shape}")
+
+        # Create visualizations
+        def normalize_for_display(x):
+            """Normalize array to 0-255 range for display."""
+            x = x.astype(np.float32)
+            x_min, x_max = x.min(), x.max()
+            if x_max - x_min < 1e-8:
+                return np.zeros_like(x, dtype=np.uint8)
+            return ((x - x_min) / (x_max - x_min) * 255).astype(np.uint8)
+
+        # Log to wandb if enabled
+        if self.use_wandb:
+            images = []
+            for i in range(min(num_samples, inputs.shape[0])):
+                # Get middle slice
+                mid_slice = inputs.shape[-1] // 2
+                
+                input_slice = inputs[i, 0].cpu().numpy()[..., mid_slice]
+                target_slice = targets[i, 0].numpy()[..., mid_slice]
+                output_slice = outputs[i, 0].detach().numpy()[..., mid_slice]
+                
+                # Normalize for display
+                input_norm = normalize_for_display(input_slice)
+                target_norm = normalize_for_display(target_slice)
+                output_norm = normalize_for_display(output_slice)
+                
+                # Stack horizontally: Input | Prediction | Target
+                combined = np.concatenate([input_norm, output_norm, target_norm], axis=1)
+                
+                subject_name = batch.get('subject_name', [f'sample_{i}' for i in range(num_samples)])[i]
+                caption = f"Epoch {self.current_epoch} - {subject_name}: Input | Prediction | Target"
+                
+                images.append(wandb.Image(combined, caption=caption))
+                print(f"DEBUG: Created wandb image for sample {i}")
+            
+            # Log to wandb
+            wandb.log({"sample_predictions": images}, step=self.global_step)
+            print(f"DEBUG: Logged {len(images)} images to wandb at step {self.global_step}")
+        
+        # Also save locally for debugging
+        try:
+            fig, axes = plt.subplots(num_samples, 3, figsize=(12, 4*num_samples))
+            if num_samples == 1:
+                axes = axes.reshape(1, -1)
+            
+            for i in range(min(num_samples, inputs.shape[0])):
+                mid_slice = inputs.shape[-1] // 2
+                
+                input_slice = inputs[i, 0].cpu().numpy()[..., mid_slice]
+                target_slice = targets[i, 0].numpy()[..., mid_slice]
+                output_slice = outputs[i, 0].detach().numpy()[..., mid_slice]
+                
+                axes[i, 0].imshow(input_slice, cmap='gray')
+                axes[i, 0].set_title(f'Sample {i} - Input')
+                axes[i, 0].axis('off')
+                
+                axes[i, 1].imshow(output_slice, cmap='gray')
+                axes[i, 1].set_title(f'Sample {i} - Prediction')
+                axes[i, 1].axis('off')
+                
+                axes[i, 2].imshow(target_slice, cmap='gray')
+                axes[i, 2].set_title(f'Sample {i} - Target')
+                axes[i, 2].axis('off')
+            
+            plt.tight_layout()
+            save_path = self.exp_dir / f'predictions_epoch_{self.current_epoch}.png'
+            plt.savefig(save_path, dpi=100, bbox_inches='tight')
+            plt.close()
+            print(f"DEBUG: Saved visualization to {save_path}")
+            
+        except Exception as e:
+            print(f"DEBUG: Error creating matplotlib visualization: {e}")
+        
+        self.model.train()
+
     def visualize_batch(self, num_samples: int = 2, phase: str = 'train'):
-        """Visualize a batch of data for a sanity check before training."""
+        """Visualize a batch of data for sanity check."""
         loader = self.train_loader if phase == 'train' else self.val_loader
         batch = next(iter(loader))
         inputs = batch['input'][:num_samples]
@@ -351,6 +421,8 @@ class Trainer:
 
         for i in range(num_samples):
             fig, axs = plt.subplots(1, inputs.shape[1] + 1, figsize=(16, 4))
+            
+            # Show all input channels
             for c in range(inputs.shape[1]):
                 img = inputs[i, c].cpu().numpy()
                 mid = img.shape[-1] // 2
@@ -358,6 +430,7 @@ class Trainer:
                 axs[c].set_title(f'Input ch{c}')
                 axs[c].axis('off')
             
+            # Show target
             tgt = targets[i, 0].cpu().numpy()
             mid = tgt.shape[-1] // 2
             axs[-1].imshow(tgt[..., mid], cmap='hot')
@@ -367,59 +440,16 @@ class Trainer:
             plt.suptitle(f'Subject: {subject_names[i]}')
             plt.show()
 
-    def log_sample_predictions(self, num_samples: int = 2):
-        """Log sample predictions to W&B for visualization."""
-        if not self.use_wandb:
-            print("[DEBUG] Skipping log_sample_predictions: wandb not enabled")
-            return
-
-        self.model.eval()
-        try:
-            batch = next(iter(self.val_loader))
-        except StopIteration:
-            print("[DEBUG] No batch available in val_loader for sample prediction logging.")
-            return
-        inputs = batch['input'][:num_samples].to(self.device)
-        targets = batch['target'][:num_samples]
-        outputs = self.model(inputs).cpu()
-        print(f"[DEBUG] Logging {min(num_samples, inputs.shape[0])} sample predictions to wandb at step {self.global_step}")
-        def norm255(x):
-            x = x.astype(np.float32)
-            x_min, x_max = x.min(), x.max()
-            if x_max - x_min < 1e-8:
-                return (x * 0).astype(np.uint8)
-            return ((x - x_min) / (x_max - x_min) * 255).astype(np.uint8)
-
-        images = []
-        for i in range(min(num_samples, inputs.shape[0])):
-            subject_name = batch.get('subject_name', ['N/A']*num_samples)[i]
-            input_slice = inputs[i, 0].cpu().numpy()
-            target_slice = targets[i, 0].numpy()
-            output_slice = outputs[i, 0].detach().numpy()
-            mid_slice = input_slice.shape[-1] // 2
-            stacked = np.concatenate([
-                norm255(input_slice[..., mid_slice]),
-                norm255(output_slice[..., mid_slice]),
-                norm255(target_slice[..., mid_slice])
-            ], axis=1)
-            caption = f"{subject_name} (Input | Prediction | Target)"
-            images.append(wandb.Image(stacked, caption=caption))
-        # Log using the current global_step without incrementing it
-        wandb.log({"sample_predictions": images}, step=self.global_step)
-        print(f"[DEBUG] wandb.log called with {len(images)} images at step {self.global_step}")
-        self.model.train()
-
 
 class SegmentationTrainer(Trainer):
-    """Trainer for segmentation sanity check, inheriting from the base Trainer."""
+    """Trainer for segmentation sanity check."""
     
     def _create_model(self) -> nn.Module:
         """Override to create a UNETR model for segmentation."""
         seg_config = self.config.copy()
         seg_config['model'] = seg_config.get('model', {}).copy()
-        seg_config['model']['out_channels'] = 1  # Binary segmentation for a quick test
+        seg_config['model']['out_channels'] = 1  # Binary segmentation
         
-        from models.unetr_synthesis import create_model
         model = create_model(seg_config)
         return model.to(self.device)
 
@@ -432,17 +462,17 @@ class SegmentationTrainer(Trainer):
         return DiceLoss(sigmoid=True, reduction='mean').to(self.device)
 
     def train_epoch(self) -> Dict[str, float]:
-        """Override training epoch for segmentation sanity check."""
+        """Override training epoch for segmentation."""
         self.model.train()
         total_loss = 0.0
         
         for batch_idx, batch in enumerate(self.train_loader):
             inputs = batch['input'].to(self.device)
-            # Use channel 0 as image and channel 1 as the mask ground truth
-            # This is a specific setup for a sanity check
+            
+            # Use first channel as image and second as mask (if available)
             if inputs.shape[1] > 1:
                 image, mask = inputs[:, 0:1], inputs[:, 1:2]
-            else: # Fallback if only one channel is provided
+            else:
                 image, mask = inputs, batch['target'].to(self.device)
 
             self.optimizer.zero_grad()
@@ -453,22 +483,6 @@ class SegmentationTrainer(Trainer):
             
             self.global_step += 1
             total_loss += loss.item()
-
-            # Visualize prediction vs. mask for the first batch of the epoch
-            if batch_idx == 0:
-                print("Visualizing segmentation sanity check prediction...")
-                pred = torch.sigmoid(outputs[0, 0]).detach().cpu().numpy()
-                msk = mask[0, 0].detach().cpu().numpy()
-                mid = pred.shape[-1] // 2
-                
-                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 4))
-                ax1.imshow(pred[..., mid], cmap='Blues')
-                ax1.set_title('Predicted Mask')
-                ax1.axis('off')
-                ax2.imshow(msk[..., mid], cmap='Reds')
-                ax2.set_title('GT Mask')
-                ax2.axis('off')
-                plt.show()
 
         avg_loss = total_loss / len(self.train_loader)
         return {'total_loss': avg_loss}
@@ -489,7 +503,7 @@ def main():
     parser.add_argument('--pretrained_path', type=str, default=None, help='Path to pretrained model')
     parser.add_argument('--freeze_layers', type=int, default=None, help='Number of layers to freeze')
     parser.add_argument('--use_wandb', action='store_true', help='Use Weights & Biases logging')
-    parser.add_argument('--sanity_check', action='store_true', help='Run segmentation sanity check instead of synthesis training')
+    parser.add_argument('--sanity_check', action='store_true', help='Run segmentation sanity check')
     
     args = parser.parse_args()
     
@@ -507,7 +521,7 @@ def main():
     if args.use_wandb:
         config.setdefault('logging', {})['use_wandb'] = True
     
-    # Instantiate the appropriate trainer
+    # Instantiate trainer
     if args.sanity_check:
         print("Initializing SegmentationTrainer for sanity check.")
         trainer = SegmentationTrainer(config, args.exp_name)
@@ -515,11 +529,11 @@ def main():
         print("Initializing standard Trainer for synthesis.")
         trainer = Trainer(config, args.exp_name)
     
-    # Visualize a batch before training starts
-    print("Visualizing a sample batch for review...")
+    # Visualize batch before training
+    print("Visualizing sample batch...")
     trainer.visualize_batch(num_samples=2, phase='train')
     
-    # Start the training process
+    # Start training
     trainer.train()
 
 

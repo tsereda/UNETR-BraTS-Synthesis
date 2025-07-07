@@ -175,6 +175,7 @@ class Trainer:
                 "system/trainable_parameters": sum(p.numel() for p in self.model.parameters() if p.requires_grad),
                 "system/device": str(self.device)
             }, step=1)
+            self._wandb_first_log = True
             self.use_wandb = True
             print(f"W&B logging enabled. Project: {project_name}")
         else:
@@ -186,7 +187,6 @@ class Trainer:
         total_loss = 0.0
         loss_components = {}
         num_batches = 0
-        
         for batch_idx, batch in enumerate(self.train_loader):
             # Move data to device
             inputs = batch['input'].to(self.device)
@@ -221,23 +221,23 @@ class Trainer:
                 # Log to W&B during training for more frequent updates
                 if self.use_wandb:
                     global_step = self.current_epoch * len(self.train_loader) + batch_idx
+                    # Avoid logging to step 0 if already logged system info at step 1
+                    wandb_step = max(global_step, 1)
                     wandb.log({
                         'batch/train_loss': total_loss_batch.item(),
                         'batch/epoch': self.current_epoch,
                         'batch/learning_rate': self.optimizer.param_groups[0]['lr'],
                         'batch/global_step': global_step
-                    }, step=global_step)
+                    }, step=wandb_step)
 
             # Log sample predictions to W&B every 100 batches
             if self.use_wandb and batch_idx % 100 == 0:
                 if hasattr(self, 'log_sample_predictions'):
                     self.log_sample_predictions()
-        
         # Average losses
         avg_loss = total_loss / num_batches
         for key in loss_components:
             loss_components[key] /= num_batches
-        
         return {'total_loss': avg_loss, **loss_components}
     
     def validate(self) -> Dict[str, float]:

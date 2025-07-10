@@ -374,7 +374,7 @@ def main():
     wandb.log({
         "dataset/train_cases": len(train_cases),
         "dataset/val_cases": len(val_cases),
-        "dataset/train_batch_size": 2,
+        "dataset/train_batch_size": 1,
         "dataset/val_batch_size": 1,
         "dataset/train_batches_per_epoch": len(train_cases) // 2,
         "dataset/val_batches_per_epoch": len(val_cases)

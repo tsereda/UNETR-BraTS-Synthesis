@@ -344,10 +344,11 @@ def main():
     dice_focal_loss = DiceFocalLoss(
         to_onehot_y=False, 
         sigmoid=True,
-        focal_weight=[1.0, 2.0, 3.0],  # Weight ET (enhancing tumor) more heavily
+        weight=[1.0, 2.0, 3.0],  # Weight TC, WT, ET (enhancing tumor gets 3x weight)
         gamma=2.0,  # Focal loss gamma parameter
         lambda_dice=1.0,  # Balance between dice and focal loss
-        lambda_focal=1.0
+        lambda_focal=1.0,
+        alpha=None  # Can be set to balance positive/negative examples
     )
     
     post_sigmoid = Activations(sigmoid=True)

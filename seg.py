@@ -269,7 +269,7 @@ def val_epoch(model, loader, epoch, acc_func, model_inferer, post_sigmoid, post_
                 dice_et = run_acc.avg[2] if len(run_acc.avg) > 2 else 0.0
                 
                 print(
-                    "Val Epoch {}/{} Batch {}/{} (batch_size=1)".format(epoch + 1, max_epochs, idx + 1, len(loader)),
+                    "Val Epoch {}/{} Batch {}/{}".format(epoch + 1, max_epochs, idx + 1, len(loader)),
                     ", dice_tc: {:.6f}".format(dice_tc),
                     ", dice_wt: {:.6f}".format(dice_wt),
                     ", dice_et: {:.6f}".format(dice_et),
@@ -353,30 +353,40 @@ def main():
     # Load datasets
     train_cases = find_brats_cases(training_dir, "train")
     val_cases = find_brats_cases(validation_dir, "val")
-    
+
+    # Check for label key and file existence in validation cases
+    missing_label_cases = []
+    for case in val_cases:
+        if "label" not in case or not os.path.exists(case.get("label", "")):
+            missing_label_cases.append(case["case_id"])
+    if missing_label_cases:
+        print(f"WARNING: The following validation cases are missing 'label' or the label file does not exist: {missing_label_cases}")
+    else:
+        print("All validation cases have a 'label' key and the label file exists.")
+
     print(f"\n=== DATASET SUMMARY ===")
     print(f"Training cases: {len(train_cases)}")
     print(f"Validation cases: {len(val_cases)}")
-    print(f"Training batch size: 2")
+    print(f"Training batch size: 1")
     print(f"Validation batch size: 1")
-    print(f"Training batches per epoch: {len(train_cases) // 2}")
+    print(f"Training batches per epoch: {len(train_cases)}")
     print(f"Validation batches per epoch: {len(val_cases)}")
-    
+
     if not train_cases:
         print("No training cases found!")
         return
-    
+
     if not val_cases:
         print("No validation cases found!")
         return
-    
+
     # Log dataset info to W&B
     wandb.log({
         "dataset/train_cases": len(train_cases),
         "dataset/val_cases": len(val_cases),
         "dataset/train_batch_size": 1,
         "dataset/val_batch_size": 1,
-        "dataset/train_batches_per_epoch": len(train_cases) // 2,
+        "dataset/train_batches_per_epoch": len(train_cases),
         "dataset/val_batches_per_epoch": len(val_cases)
     })
     

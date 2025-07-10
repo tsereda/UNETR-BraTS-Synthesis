@@ -8,6 +8,18 @@ spec:
   nodeSelector:
     topology.kubernetes.io/region: us-west
     nautilus.io/linstor: "true"
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: nvidia.com/gpu.product
+            operator: In
+            values:
+            - NVIDIA-A10
+            - NVIDIA-GeForce-RTX-3090
+            - NVIDIA-L40
+            - NVIDIA-A40
   
   containers:
     - name: brats-processing

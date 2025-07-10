@@ -8,6 +8,18 @@ spec:
   nodeSelector:
     topology.kubernetes.io/region: us-west
     nautilus.io/linstor: "true"
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: nvidia.com/gpu.product
+            operator: In
+            values:
+            - NVIDIA-A10
+            - NVIDIA-GeForce-RTX-3090
+            - NVIDIA-L40
+            - NVIDIA-A40
   
   containers:
     - name: brats-processing
@@ -57,7 +69,7 @@ spec:
           # synapse config
           # synapse get -r syn51514105 
 
-          git clone -b moresamples https://github.com/tsereda/UNETR-BraTS-Synthesis.git ${REPO_PATH}
+          git clone -b justseg https://github.com/tsereda/UNETR-BraTS-Synthesis.git ${REPO_PATH}
           cd ${REPO_PATH}
           
           sudo apt-get update && sudo apt-get install -y p7zip-full wget git
@@ -90,20 +102,18 @@ spec:
           
           python -c "import wandb; print(f'W&B version: {wandb.__version__}')"
           
-          python scripts/test_wandb.py
+          # python scripts/test_wandb.py
           
           python -c "import torch; print(f'GPUs available: {torch.cuda.device_count()}')"
           
           # python scripts/validate_data.py --data_root ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData
 
-          python scripts/download_pretrained.py --model brats_segmentation
+          # python scripts/download_pretrained.py --model brats_segmentation
 
 
-          PYTHONUNBUFFERED=1 python train.py \
-            --data_root ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData \
-            --config configs/unetr_base.yaml \
-            --exp_name brats_synthesis_v1 \
-            --use_wandb
+          #PYTHONUNBUFFERED=1 python train.py \
+          #  --data_root ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData \
+          #  --use_wandb
           
           tail -f /dev/null
       

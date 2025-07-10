@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-BraTS Segmentation
+BraTS Segmentation - Enhanced Version
 """
 
 import os
@@ -9,11 +9,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 from functools import partial
 import time
+import warnings
 
 import torch
 import wandb
 
-from monai.losses import DiceLoss
+from monai.losses import DiceFocalLoss
 from monai.inferers import sliding_window_inference
 from monai import transforms
 from monai.transforms import AsDiscrete, Activations
@@ -22,6 +23,9 @@ from monai.utils.enums import MetricReduction
 from monai.networks.nets import SwinUNETR
 from monai.data import Dataset, DataLoader
 from monai.data import decollate_batch
+
+# Suppress numpy warnings for cleaner output
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 
 class AverageMeter(object):
@@ -141,8 +145,22 @@ def train_epoch(model, loader, optimizer, epoch, loss_func, max_epochs):
     return run_loss.avg
 
 
+def safe_dice_computation(pred, target, smooth=1e-6):
+    """Safely compute dice score to avoid division by zero"""
+    intersection = (pred * target).sum()
+    pred_sum = pred.sum()
+    target_sum = target.sum()
+    
+    if pred_sum == 0 and target_sum == 0:
+        return 1.0  # Perfect score when both are empty
+    elif pred_sum == 0 or target_sum == 0:
+        return 0.0  # No overlap when one is empty
+    else:
+        return (2.0 * intersection + smooth) / (pred_sum + target_sum + smooth)
+
+
 def val_epoch(model, loader, epoch, acc_func, model_inferer, post_sigmoid, post_pred, max_epochs):
-    """Validation epoch"""
+    """Validation epoch with improved error handling"""
     model.eval()
     start_time = time.time()
     run_acc = AverageMeter()
@@ -150,31 +168,40 @@ def val_epoch(model, loader, epoch, acc_func, model_inferer, post_sigmoid, post_
     with torch.no_grad():
         for idx, batch_data in enumerate(loader):
             data, target = batch_data["image"].cuda(), batch_data["label"].cuda()
-            logits = model_inferer(data)
             
-            val_labels_list = decollate_batch(target)
-            val_outputs_list = decollate_batch(logits)
-            val_output_convert = [post_pred(post_sigmoid(val_pred_tensor)) for val_pred_tensor in val_outputs_list]
-            
-            acc_func.reset()
-            acc_func(y_pred=val_output_convert, y=val_labels_list)
-            acc, not_nans = acc_func.aggregate()
-            run_acc.update(acc.cpu().numpy(), n=not_nans.cpu().numpy())
-            
-            dice_tc = run_acc.avg[0]
-            dice_wt = run_acc.avg[1]
-            dice_et = run_acc.avg[2]
-            print(
-                "Val {}/{} {}/{}".format(epoch, max_epochs, idx, len(loader)),
-                ", dice_tc:",
-                dice_tc,
-                ", dice_wt:",
-                dice_wt,
-                ", dice_et:",
-                dice_et,
-                ", time {:.2f}s".format(time.time() - start_time),
-            )
-            start_time = time.time()
+            try:
+                logits = model_inferer(data)
+                
+                val_labels_list = decollate_batch(target)
+                val_outputs_list = decollate_batch(logits)
+                val_output_convert = [post_pred(post_sigmoid(val_pred_tensor)) for val_pred_tensor in val_outputs_list]
+                
+                acc_func.reset()
+                acc_func(y_pred=val_output_convert, y=val_labels_list)
+                acc, not_nans = acc_func.aggregate()
+                
+                # Handle NaN values safely
+                acc_safe = torch.nan_to_num(acc, nan=0.0)
+                not_nans_safe = torch.clamp(not_nans, min=1)  # Avoid division by zero
+                
+                run_acc.update(acc_safe.cpu().numpy(), n=not_nans_safe.cpu().numpy())
+                
+                dice_tc = run_acc.avg[0] if len(run_acc.avg) > 0 else 0.0
+                dice_wt = run_acc.avg[1] if len(run_acc.avg) > 1 else 0.0
+                dice_et = run_acc.avg[2] if len(run_acc.avg) > 2 else 0.0
+                
+                print(
+                    "Val {}/{} {}/{}".format(epoch, max_epochs, idx, len(loader)),
+                    ", dice_tc: {:.6f}".format(dice_tc),
+                    ", dice_wt: {:.6f}".format(dice_wt),
+                    ", dice_et: {:.6f}".format(dice_et),
+                    ", time {:.2f}s".format(time.time() - start_time),
+                )
+                start_time = time.time()
+                
+            except Exception as e:
+                print(f"Error in validation step {idx}: {e}")
+                continue
 
     return run_acc.avg
 
@@ -187,40 +214,44 @@ def log_training_samples(model, val_loader, val_cases, model_inferer, post_sigmo
             if idx >= num_samples:  # Log more samples for better monitoring
                 break
                 
-            data, target = batch_data["image"].cuda(), batch_data["label"].cuda()
-            logits = model_inferer(data)
-            
-            # Convert prediction for visualization
-            pred_sigmoid = post_sigmoid(logits)
-            pred_discrete = post_pred(pred_sigmoid)
-            
-            pred = pred_discrete[0].cpu().numpy()
-            pred_viz = np.zeros((pred.shape[1], pred.shape[2], pred.shape[3]))
-            pred_viz[pred[1] == 1] = 2  # ED
-            pred_viz[pred[0] == 1] = 1  # TC  
-            pred_viz[pred[2] == 1] = 4  # ET
-            
-            # Get original label
-            label_viz = target[0].cpu().numpy()
-            label_orig = np.zeros((label_viz.shape[1], label_viz.shape[2], label_viz.shape[3]))
-            label_orig[label_viz[1] == 1] = 2
-            label_orig[label_viz[0] == 1] = 1
-            label_orig[label_viz[2] == 1] = 4
-            
-            # Log to W&B
-            case_name = val_cases[idx]["case_id"]
-            log_segmentation_sample(
-                data[0].cpu().numpy(), 
-                label_orig, 
-                pred_viz, 
-                case_name, 
-                epoch
-            )
+            try:
+                data, target = batch_data["image"].cuda(), batch_data["label"].cuda()
+                logits = model_inferer(data)
+                
+                # Convert prediction for visualization
+                pred_sigmoid = post_sigmoid(logits)
+                pred_discrete = post_pred(pred_sigmoid)
+                
+                pred = pred_discrete[0].cpu().numpy()
+                pred_viz = np.zeros((pred.shape[1], pred.shape[2], pred.shape[3]))
+                pred_viz[pred[1] == 1] = 2  # ED
+                pred_viz[pred[0] == 1] = 1  # TC  
+                pred_viz[pred[2] == 1] = 4  # ET
+                
+                # Get original label
+                label_viz = target[0].cpu().numpy()
+                label_orig = np.zeros((label_viz.shape[1], label_viz.shape[2], label_viz.shape[3]))
+                label_orig[label_viz[1] == 1] = 2
+                label_orig[label_viz[0] == 1] = 1
+                label_orig[label_viz[2] == 1] = 4
+                
+                # Log to W&B
+                case_name = val_cases[idx]["case_id"]
+                log_segmentation_sample(
+                    data[0].cpu().numpy(), 
+                    label_orig, 
+                    pred_viz, 
+                    case_name, 
+                    epoch
+                )
+            except Exception as e:
+                print(f"Error logging sample {idx}: {e}")
+                continue
 
 
 def main():
     # Initialize W&B
-    wandb.init(project="BraTS-Simple-Seg", name="simple_full_training")
+    wandb.init(project="BraTS-Enhanced-Seg", name="enhanced_focal_warmrestart")
     
     # Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -308,12 +339,25 @@ def main():
         use_checkpoint=True,
     ).cuda()
     
-    # Loss and metrics
+    # Enhanced Loss Function with Focal Loss and Class Weighting
     torch.backends.cudnn.benchmark = True
-    dice_loss = DiceLoss(to_onehot_y=False, sigmoid=True)
+    dice_focal_loss = DiceFocalLoss(
+        to_onehot_y=False, 
+        sigmoid=True,
+        focal_weight=[1.0, 2.0, 3.0],  # Weight ET (enhancing tumor) more heavily
+        gamma=2.0,  # Focal loss gamma parameter
+        lambda_dice=1.0,  # Balance between dice and focal loss
+        lambda_focal=1.0
+    )
+    
     post_sigmoid = Activations(sigmoid=True)
     post_pred = AsDiscrete(argmax=False, threshold=0.5)
-    dice_acc = DiceMetric(include_background=True, reduction=MetricReduction.MEAN_BATCH, get_not_nans=True)
+    dice_acc = DiceMetric(
+        include_background=True, 
+        reduction=MetricReduction.MEAN_BATCH, 
+        get_not_nans=True,
+        ignore_empty=False  # Handle empty predictions gracefully
+    )
     
     model_inferer = partial(
         sliding_window_inference,
@@ -323,17 +367,26 @@ def main():
         overlap=0.5,
     )
     
-    # Training setup
+    # Training setup with enhanced learning rate scheduling
     max_epochs = 50
     val_every = 2  # Validate every 2 epochs instead of 5
     sample_log_every = 1  # Log samples every epoch
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_epochs)
+    
+    # Enhanced Learning Rate Scheduler with Warm Restarts
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, 
+        T_0=10,        # Initial restart period
+        T_mult=2,      # Multiply restart period by this factor after each restart
+        eta_min=1e-6   # Minimum learning rate
+    )
     
     print(f"Training for {max_epochs} epochs")
     print(f"Validation every {val_every} epochs")
     print(f"Sample logging every {sample_log_every} epochs")
+    print(f"Using DiceFocalLoss with class weights: [1.0, 2.0, 3.0]")
+    print(f"Using CosineAnnealingWarmRestarts scheduler")
     
     val_acc_max = 0.0
     
@@ -347,7 +400,7 @@ def main():
             loader=train_loader,
             optimizer=optimizer,
             epoch=epoch,
-            loss_func=dice_loss,
+            loss_func=dice_focal_loss,
             max_epochs=max_epochs
         )
         
@@ -392,21 +445,18 @@ def main():
                 max_epochs=max_epochs
             )
             
-            dice_tc = val_acc[0]
-            dice_wt = val_acc[1]
-            dice_et = val_acc[2]
-            val_avg_acc = np.mean(val_acc)
+            # Safe extraction of dice scores
+            dice_tc = val_acc[0] if len(val_acc) > 0 and not np.isnan(val_acc[0]) else 0.0
+            dice_wt = val_acc[1] if len(val_acc) > 1 and not np.isnan(val_acc[1]) else 0.0
+            dice_et = val_acc[2] if len(val_acc) > 2 and not np.isnan(val_acc[2]) else 0.0
+            val_avg_acc = np.nanmean(val_acc) if len(val_acc) > 0 else 0.0
             
             print(
                 "Final validation stats {}/{}".format(epoch, max_epochs - 1),
-                ", dice_tc:",
-                dice_tc,
-                ", dice_wt:",
-                dice_wt,
-                ", dice_et:",
-                dice_et,
-                ", Dice_Avg:",
-                val_avg_acc,
+                ", dice_tc: {:.6f}".format(dice_tc),
+                ", dice_wt: {:.6f}".format(dice_wt),
+                ", dice_et: {:.6f}".format(dice_et),
+                ", Dice_Avg: {:.6f}".format(val_avg_acc),
                 ", time {:.2f}s".format(time.time() - epoch_time),
             )
             
@@ -425,7 +475,7 @@ def main():
                 
         scheduler.step()
     
-    print(f"\n✓ Training completed! Best average dice: {val_acc_max:.4f}")
+    print(f"\n✓ Training completed! Best average dice: {val_acc_max:.6f}")
     print("Check your W&B project for detailed logs and segmentation samples!")
     wandb.finish()
 

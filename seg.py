@@ -147,7 +147,7 @@ def train_epoch(model, loader, optimizer, epoch, loss_func, max_epochs, model_in
     model.train()
     start_time = time.time()
     run_loss = AverageMeter()
-    batch_log_freq = 20  # Log every 20 batches
+    batch_log_freq = 100
     
     for idx, batch_data in enumerate(loader):
         data, target = batch_data["image"].cuda(), batch_data["label"].cuda()
@@ -161,7 +161,7 @@ def train_epoch(model, loader, optimizer, epoch, loss_func, max_epochs, model_in
         run_loss.update(loss.item(), n=data.shape[0])
         
         print(
-            "Epoch {}/{} Batch {}/{} (batch_size=2)".format(epoch + 1, max_epochs, idx + 1, len(loader)),
+            "Epoch {}/{} Batch {}/{}".format(epoch + 1, max_epochs, idx + 1, len(loader)),
             "loss: {:.4f}".format(run_loss.avg),
             "time {:.2f}s".format(time.time() - start_time),
         )
@@ -413,7 +413,7 @@ def main():
     
     # Data loaders
     train_ds = Dataset(data=train_cases, transform=train_transform)
-    train_loader = DataLoader(train_ds, batch_size=2, shuffle=True, num_workers=8, pin_memory=True)
+    train_loader = DataLoader(train_ds, batch_size=1, shuffle=True, num_workers=8, pin_memory=True)
     
     val_ds = Dataset(data=val_cases, transform=val_transform)
     val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=8, pin_memory=True)

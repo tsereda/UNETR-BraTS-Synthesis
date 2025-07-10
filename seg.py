@@ -339,30 +339,23 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
-    # Find training and validation cases from separate directories
+    # Use only the training directory and split into train/val
     print("Looking for BraTS data...")
     base_dir = "/app/UNETR-BraTS-Synthesis"
-    training_dir = os.path.join(base_dir, "ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData")
-    validation_dir = os.path.join(base_dir, "ASNR-MICCAI-BraTS2023-GLI-Challenge-ValidationData")
-    
-    print(f"Training directory: {training_dir}")
-    print(f"Validation directory: {validation_dir}")
-    print(f"Training dir exists: {os.path.exists(training_dir)}")
-    print(f"Validation dir exists: {os.path.exists(validation_dir)}")
-    
-    # Load datasets
-    train_cases = find_brats_cases(training_dir, "train")
-    val_cases = find_brats_cases(validation_dir, "val")
+    data_dir = os.path.join(base_dir, "ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData")
+    print(f"Data directory: {data_dir}")
+    print(f"Data dir exists: {os.path.exists(data_dir)}")
 
-    # Check for label key and file existence in validation cases
-    missing_label_cases = []
-    for case in val_cases:
-        if "label" not in case or not os.path.exists(case.get("label", "")):
-            missing_label_cases.append(case["case_id"])
-    if missing_label_cases:
-        print(f"WARNING: The following validation cases are missing 'label' or the label file does not exist: {missing_label_cases}")
-    else:
-        print("All validation cases have a 'label' key and the label file exists.")
+    # Load all cases from training data
+    all_cases = find_brats_cases(data_dir, "train")
+    print(f"Total cases found: {len(all_cases)}")
+
+    # Split into train/val (e.g., 90% train, 10% val)
+    np.random.seed(42)
+    np.random.shuffle(all_cases)
+    split_idx = int(0.9 * len(all_cases))
+    train_cases = all_cases[:split_idx]
+    val_cases = all_cases[split_idx:]
 
     print(f"\n=== DATASET SUMMARY ===")
     print(f"Training cases: {len(train_cases)}")

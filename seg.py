@@ -38,10 +38,17 @@ class AverageMeter(object):
         self.val = val
         self.sum += val * n
         self.count += n
-        if self.count > 0:
-            self.avg = self.sum / self.count
+        # If self.count is an array (multi-class), use .all() to check if all counts > 0
+        if isinstance(self.count, np.ndarray):
+            if (self.count > 0).all():
+                self.avg = self.sum / self.count
+            else:
+                self.avg = self.sum
         else:
-            self.avg = self.sum
+            if self.count > 0:
+                self.avg = self.sum / self.count
+            else:
+                self.avg = self.sum
 
 
 def find_brats_cases(data_dir):

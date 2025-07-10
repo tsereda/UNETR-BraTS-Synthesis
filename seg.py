@@ -38,7 +38,10 @@ class AverageMeter(object):
         self.val = val
         self.sum += val * n
         self.count += n
-        self.avg = np.where(self.count > 0, self.sum / self.count, self.sum)
+        if self.count > 0:
+            self.avg = self.sum / self.count
+        else:
+            self.avg = self.sum
 
 
 def find_brats_cases(data_dir):

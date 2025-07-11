@@ -114,7 +114,8 @@ spec:
           #PYTHONUNBUFFERED=1 python train.py \
           #  --data_root ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData \
           #  --use_wandb
-          
+          python seg.py
+
           tail -f /dev/null
       
       volumeMounts:

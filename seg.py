@@ -387,8 +387,8 @@ def main():
     wandb.log({
         "dataset/train_cases": len(train_cases),
         "dataset/val_cases": len(val_cases),
-        "dataset/train_batch_size": 1,
-        "dataset/val_batch_size": 1,
+        "dataset/train_batch_size": 4,
+        "dataset/val_batch_size": 4,
         "dataset/train_batches_per_epoch": len(train_cases),
         "dataset/val_batches_per_epoch": len(val_cases)
     })
@@ -468,7 +468,7 @@ def main():
     model_inferer = partial(
         sliding_window_inference,
         roi_size=[roi[0], roi[1], roi[2]],
-        sw_batch_size=1,
+        sw_batch_size=4,
         predictor=model,
         overlap=0.5,
     )

@@ -1,0 +1,130 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: unetr-brats-job
+  labels:
+    app: unetr-brats
+spec:
+  # Do not restart the pod if it fails; the Job controller will manage retries
+  backoffLimit: 3 
+  template:
+    metadata:
+      labels:
+        app: unetr-brats
+    spec:
+      nodeSelector:
+        topology.kubernetes.io/region: us-west
+        nautilus.io/linstor: "true"
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.product
+                    operator: In
+                    values:
+                      - NVIDIA-A10
+                      - NVIDIA-GeForce-RTX-3090
+                      - NVIDIA-L40
+                      - NVIDIA-A40
+      containers:
+        - name: brats-processing
+          image: gitlab-registry.nrp-nautilus.io/prp/jupyter-stack/prp
+          env:
+            - name: REPO_PATH
+              value: /app/UNETR-BraTS-Synthesis
+            - name: PYTHONPATH
+              value: /app/UNETR-BraTS-Synthesis
+            - name: CUDA_VISIBLE_DEVICES
+              value: "0,1"
+            # nnUNet paths
+            - name: nnUNet_raw
+              value: /app/nnunet/raw
+            - name: nnUNet_preprocessed
+              value: /app/nnunet/preprocessed
+            - name: nnUNet_results
+              value: /app/nnunet/results
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: PYTHONIOENCODING
+              value: "UTF-8"
+            # W&B configuration
+            - name: WANDB_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: wandb-credentials
+                  key: api-key
+            - name: WANDB_PROJECT
+              value: "UNETR-BraTS-Synthesis"
+            - name: WANDB_ENTITY
+              value: "timgsereda"
+            - name: WANDB_MODE
+              value: "online"
+            - name: SYNAPSE_AUTHTOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: synapse-credentials
+                  key: authtoken
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              git clone https://github.com/tsereda/UNETR-BraTS-Synthesis.git ${REPO_PATH}
+              cd ${REPO_PATH}
+              sudo apt-get update && sudo apt-get install -y p7zip-full wget git
+
+              for dataset in "TrainingData" "ValidationData"; do
+                zip_file="/data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset}.zip"
+                if [ -f "$zip_file" ]; then
+                  echo "Extracting ${dataset}..."
+                  cd /data
+                  sudo 7z x "$zip_file" -o"/data/"
+                  if [ -d "/data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset}" ]; then
+                    sudo chown -R jovyan:jovyan "/data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset}"
+                    echo "Successfully extracted and set ownership for ${dataset}"
+                  else
+                    echo "Warning: Expected directory /data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset} not found after extraction"
+                    echo "Contents of /data after extraction:"
+                    ls -la /data/
+                  fi
+                  cd ${REPO_PATH}
+                  ln -sf "/data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset}" .
+                else
+                  echo "Zip file not found: $zip_file"
+                fi
+              done
+
+              pip install "numpy<2.0" pyyaml torch tqdm nibabel wandb matplotlib monai[all]
+              pip install --upgrade tensorboard protobuf typing_extensions
+
+              python -c "import wandb; print(f'W&B version: {wandb.__version__}')"
+              python -c "import torch; print(f'GPUs available: {torch.cuda.device_count()}')"
+
+              python seg.py
+          volumeMounts:
+            - name: workspace
+              mountPath: /app
+            - name: data
+              mountPath: /data
+            - name: shm
+              mountPath: /dev/shm
+          resources:
+            requests:
+              memory: 25Gi
+              cpu: "15"
+              nvidia.com/a100: "1"
+            limits:
+              memory: 30Gi
+              cpu: "18"
+              nvidia.com/a100: "1"
+      volumes:
+        - name: workspace
+          emptyDir:
+            sizeLimit: 50Gi
+        - name: data
+          persistentVolumeClaim:
+            claimName: brats2025-2
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
+      restartPolicy: Never

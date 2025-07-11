@@ -55,7 +55,7 @@ spec:
           command: ["/bin/bash", "-c"]
           args:
             - |
-              git clone https://github.com/tsereda/UNETR-BraTS-Synthesis.git ${REPO_PATH}
+              git clone -b addpthsaving https://github.com/tsereda/UNETR-BraTS-Synthesis.git ${REPO_PATH}
               cd ${REPO_PATH}
               sudo apt-get update && sudo apt-get install -y p7zip-full wget git
 
@@ -86,7 +86,10 @@ spec:
               python -c "import wandb; print(f'W&B version: {wandb.__version__}')"
               python -c "import torch; print(f'GPUs available: {torch.cuda.device_count()}')"
 
-              python seg.py
+              sudo mkdir /data/segresults/
+              cd ${REPO_PATH}
+              python seg.py --save_path /data/segresults/best_model.pth
+              ls -a
           volumeMounts:
             - name: workspace
               mountPath: /app

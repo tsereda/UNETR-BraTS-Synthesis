@@ -455,7 +455,7 @@ def main():
     
     # Model
     model = SwinUNETR(
-        in_channels=8,
+        in_channels=4,
         out_channels=3,
         feature_size=48,
         drop_rate=0.0,

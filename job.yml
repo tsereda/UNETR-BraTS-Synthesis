@@ -5,28 +5,15 @@ metadata:
   labels:
     app: unetr-brats
 spec:
-  # Do not restart the pod if it fails; the Job controller will manage retries
-  backoffLimit: 3 
+  backoffLimit: 1 
   template:
     metadata:
       labels:
         app: unetr-brats
     spec:
       nodeSelector:
-        topology.kubernetes.io/region: us-west
+        #topology.kubernetes.io/region: us-west
         nautilus.io/linstor: "true"
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: nvidia.com/gpu.product
-                    operator: In
-                    values:
-                      - NVIDIA-A10
-                      - NVIDIA-GeForce-RTX-3090
-                      - NVIDIA-L40
-                      - NVIDIA-A40
       containers:
         - name: brats-processing
           image: gitlab-registry.nrp-nautilus.io/prp/jupyter-stack/prp

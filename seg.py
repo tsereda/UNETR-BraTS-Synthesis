@@ -406,8 +406,8 @@ def main():
     wandb.log({
         "dataset/train_cases": len(train_cases),
         "dataset/val_cases": len(val_cases),
-        "dataset/train_batch_size": 4,
-        "dataset/val_batch_size": 4,
+        "dataset/train_batch_size": 8,
+        "dataset/val_batch_size": 8,
         "dataset/train_batches_per_epoch": len(train_cases),
         "dataset/val_batches_per_epoch": len(val_cases),
         "save_path": args.save_path
@@ -446,16 +446,16 @@ def main():
     
     # Data loaders
     train_ds = Dataset(data=train_cases, transform=train_transform)
-    train_loader = DataLoader(train_ds, batch_size=4, shuffle=True, num_workers=8, pin_memory=True)
+    train_loader = DataLoader(train_ds, batch_size=8, shuffle=True, num_workers=8, pin_memory=True)
     
     val_ds = Dataset(data=val_cases, transform=val_transform)
-    val_loader = DataLoader(val_ds, batch_size=4, shuffle=False, num_workers=8, pin_memory=True)
+    val_loader = DataLoader(val_ds, batch_size=8, shuffle=False, num_workers=8, pin_memory=True)
     
     print(f"Actual training batches: {len(train_loader)}, Validation batches: {len(val_loader)}")
     
     # Model
     model = SwinUNETR(
-        in_channels=4,
+        in_channels=8,
         out_channels=3,
         feature_size=48,
         drop_rate=0.0,
@@ -488,13 +488,13 @@ def main():
     model_inferer = partial(
         sliding_window_inference,
         roi_size=[roi[0], roi[1], roi[2]],
-        sw_batch_size=4,
+        sw_batch_size=8,
         predictor=model,
         overlap=0.5,
     )
     
     # Training setup with enhanced learning rate scheduling
-    max_epochs = 100
+    max_epochs = 2
     val_every = 5  # Validate every 2 epochs
     sample_log_every = 1  # Log samples every epoch
     

@@ -5,6 +5,7 @@ BraTS Segmentation - Enhanced Version with Proper Validation Dataset and Batch L
 
 import os
 import glob
+import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 from functools import partial
@@ -341,13 +342,31 @@ def log_training_samples(model, val_loader, val_cases, model_inferer, post_sigmo
         log_segmentation_samples(images, labels, predictions, case_names, epoch)
 
 
+def parse_args():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(description='BraTS Segmentation Training')
+    parser.add_argument('--save_path', type=str, required=True,
+                        help='Path where to save the best model (e.g., /path/to/best_model.pth)')
+    return parser.parse_args()
+
+
 def main():
+    # Parse arguments
+    args = parse_args()
+    
+    # Ensure save directory exists
+    save_dir = os.path.dirname(args.save_path)
+    if save_dir and not os.path.exists(save_dir):
+        os.makedirs(save_dir, exist_ok=True)
+        print(f"Created save directory: {save_dir}")
+    
     # Initialize W&B
     wandb.init(project="BraTS-Enhanced-Seg", name="enhanced_focal_warmrestart_proper_val")
     
     # Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    print(f"Model will be saved to: {args.save_path}")
     
     # Use only the training directory and split into train/val
     print("Looking for BraTS data...")
@@ -390,7 +409,8 @@ def main():
         "dataset/train_batch_size": 4,
         "dataset/val_batch_size": 4,
         "dataset/train_batches_per_epoch": len(train_cases),
-        "dataset/val_batches_per_epoch": len(val_cases)
+        "dataset/val_batches_per_epoch": len(val_cases),
+        "save_path": args.save_path
     })
     
     # Transforms
@@ -426,10 +446,10 @@ def main():
     
     # Data loaders
     train_ds = Dataset(data=train_cases, transform=train_transform)
-    train_loader = DataLoader(train_ds, batch_size=1, shuffle=True, num_workers=8, pin_memory=True)
+    train_loader = DataLoader(train_ds, batch_size=4, shuffle=True, num_workers=8, pin_memory=True)
     
     val_ds = Dataset(data=val_cases, transform=val_transform)
-    val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=8, pin_memory=True)
+    val_loader = DataLoader(val_ds, batch_size=2, shuffle=False, num_workers=8, pin_memory=True)
     
     print(f"Actual training batches: {len(train_loader)}, Validation batches: {len(val_loader)}")
     
@@ -468,14 +488,14 @@ def main():
     model_inferer = partial(
         sliding_window_inference,
         roi_size=[roi[0], roi[1], roi[2]],
-        sw_batch_size=4,
+        sw_batch_size=2,
         predictor=model,
         overlap=0.5,
     )
     
     # Training setup with enhanced learning rate scheduling
     max_epochs = 100
-    val_every = 5  # Validate every 2 epochs
+    val_every = 1  # Validate every 2 epochs
     sample_log_every = 1  # Log samples every epoch
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
@@ -589,10 +609,28 @@ def main():
                 val_acc_max = val_avg_acc
                 wandb.log({"best_val_dice_avg": val_acc_max})
                 
+                # Save the best model
+                try:
+                    torch.save({
+                        'epoch': epoch + 1,
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'scheduler_state_dict': scheduler.state_dict(),
+                        'val_acc_max': val_acc_max,
+                        'dice_tc': dice_tc,
+                        'dice_wt': dice_wt,
+                        'dice_et': dice_et,
+                        'train_loss': train_loss
+                    }, args.save_path)
+                    print(f"✓ Best model saved to: {args.save_path}")
+                except Exception as e:
+                    print(f"ERROR saving model: {e}")
+                
         scheduler.step()
     
     print(f"\n✓ TRAINING COMPLETED!")
     print(f"✓ Best average dice score: {val_acc_max:.6f}")
+    print(f"✓ Best model saved to: {args.save_path}")
     print(f"✓ Check your W&B project for detailed logs and segmentation samples!")
     print(f"✓ Training used proper validation dataset from ValidationData folder")
     wandb.finish()

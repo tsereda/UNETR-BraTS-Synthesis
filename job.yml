@@ -91,7 +91,7 @@ spec:
               ls /data/
               whoami
               ls -ld /data/segresults/
-              python seg.py --save_path /data/segresults/best_model.pt
+              python seg.py --save_path /data/segresults/best_model_batchsize4_epoch100_128.pt
               ls -a /data/segresults/
           volumeMounts:
             - name: workspace

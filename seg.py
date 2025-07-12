@@ -494,7 +494,7 @@ def main():
     )
     
     # Training setup with enhanced learning rate scheduling
-    max_epochs = 1
+    max_epochs = 100
     val_every = 1  # Validate every 2 epochs
     sample_log_every = 1  # Log samples every epoch
     

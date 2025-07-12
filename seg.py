@@ -449,7 +449,7 @@ def main():
     train_loader = DataLoader(train_ds, batch_size=4, shuffle=True, num_workers=8, pin_memory=True)
     
     val_ds = Dataset(data=val_cases, transform=val_transform)
-    val_loader = DataLoader(val_ds, batch_size=4, shuffle=False, num_workers=8, pin_memory=True)
+    val_loader = DataLoader(val_ds, batch_size=2, shuffle=False, num_workers=8, pin_memory=True)
     
     print(f"Actual training batches: {len(train_loader)}, Validation batches: {len(val_loader)}")
     
@@ -488,7 +488,7 @@ def main():
     model_inferer = partial(
         sliding_window_inference,
         roi_size=[roi[0], roi[1], roi[2]],
-        sw_batch_size=4,
+        sw_batch_size=2,
         predictor=model,
         overlap=0.5,
     )

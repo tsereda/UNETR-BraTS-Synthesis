@@ -87,8 +87,10 @@ spec:
               python -c "import torch; print(f'GPUs available: {torch.cuda.device_count()}')"
 
               sudo mkdir /data/segresults/
+              sudo chown -R jovyan:jovyan /data/segresults/
               cd ${REPO_PATH}
-              python seg.py --save_path /data/segresults/best_model.pth
+              ls /data/
+              python seg.py --save_path /data/segresults/best_model.pt
               ls -a /data/segresults/
           volumeMounts:
             - name: workspace

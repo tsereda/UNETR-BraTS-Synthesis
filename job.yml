@@ -89,7 +89,7 @@ spec:
               sudo mkdir /data/segresults/
               cd ${REPO_PATH}
               python seg.py --save_path /data/segresults/best_model.pth
-              ls -a
+              ls -a /data/segresults/
           volumeMounts:
             - name: workspace
               mountPath: /app

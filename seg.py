@@ -495,7 +495,7 @@ def main():
     
     # Training setup with enhanced learning rate scheduling
     max_epochs = 2
-    val_every = 5  # Validate every 2 epochs
+    val_every = 1  # Validate every 2 epochs
     sample_log_every = 1  # Log samples every epoch
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)

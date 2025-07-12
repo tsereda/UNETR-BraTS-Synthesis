@@ -86,12 +86,11 @@ spec:
               python -c "import wandb; print(f'W&B version: {wandb.__version__}')"
               python -c "import torch; print(f'GPUs available: {torch.cuda.device_count()}')"
 
-              sudo mkdir /data/segresults/
-              sudo chown -R jovyan:jovyan /data/segresults/
+              sudo chmod 777 /data/segresults/
               cd ${REPO_PATH}
               ls /data/
               whoami
-              -ld /data/segresults/
+              ls -ld /data/segresults/
               python seg.py --save_path /data/segresults/best_model.pt
               ls -a /data/segresults/
           volumeMounts:

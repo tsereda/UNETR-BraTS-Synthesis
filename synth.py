@@ -79,31 +79,22 @@ class SynthesisModel(nn.Module):
             self.input_adapter = nn.Conv3d(input_channels, 4, kernel_size=1, padding=0)
             # Initialize with pretrained weights (average across channels)
             with torch.no_grad():
-                # Print encoder1 attributes to help debug
-                print("encoder1 attributes:", dir(self.backbone.encoder1))
-                # Try common attribute names for the input conv
-                conv_attr = None
-                for attr in ["conv", "block", "layers", "layer0", "layer", "main", "net"]:
-                    if hasattr(self.backbone.encoder1, attr):
-                        conv_attr = attr
-                        break
-                if conv_attr is None:
-                    raise AttributeError("Could not find input conv in encoder1. Please check encoder1 attributes above.")
-                conv_module = getattr(self.backbone.encoder1, conv_attr)
-                # If it's a Sequential or list, get the first Conv3d
-                if isinstance(conv_module, (nn.Sequential, list)):
-                    for m in conv_module:
-                        if isinstance(m, nn.Conv3d):
-                            conv_module = m
-                            break
-                if not isinstance(conv_module, nn.Conv3d):
-                    raise AttributeError(f"encoder1.{conv_attr} is not a Conv3d. Found type: {type(conv_module)}")
+                # Find the first Conv3d inside encoder1.layer.conv
+                conv_module = None
+                if hasattr(self.backbone.encoder1, "layer"):
+                    layer = self.backbone.encoder1.layer
+                    if hasattr(layer, "conv"):
+                        conv_seq = layer.conv
+                        for m in conv_seq.modules():
+                            if isinstance(m, nn.Conv3d):
+                                conv_module = m
+                                break
+                if conv_module is None:
+                    raise AttributeError("Could not find Conv3d in encoder1.layer.conv. Please check model structure.")
                 old_weight = conv_module.weight.data
                 old_bias = conv_module.bias.data
                 if input_channels == 3:
-                    # Average first 3 channels for 3-input case
                     new_weight = old_weight[:, :3, :, :, :].clone()
-                    # Average across input channels, then repeat for input_channels
                     self.input_adapter.weight.data = new_weight.mean(dim=1, keepdim=True).repeat(1, input_channels, 1, 1, 1)
                     self.input_adapter.bias.data = old_bias.clone()
         else:

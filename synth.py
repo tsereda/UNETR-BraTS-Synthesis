@@ -107,10 +107,12 @@ class SynthesisModel(nn.Module):
             self.input_adapter = nn.Identity()
         
         # Replace output head for synthesis (1 channel output)
+        # UnetOutBlock does not have in_channels, so get from its conv layer
+        in_channels = self.backbone.out.conv.in_channels
         self.backbone.out = nn.Conv3d(
-            self.backbone.out.in_channels, 
-            output_channels, 
-            kernel_size=1, 
+            in_channels,
+            output_channels,
+            kernel_size=1,
             padding=0
         )
         

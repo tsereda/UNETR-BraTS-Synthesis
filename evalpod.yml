@@ -107,16 +107,14 @@ spec:
           python -c "import torch; print(f'GPUs available: {torch.cuda.device_count()}')"
           
           pip install "numpy<2.0" torch nibabel matplotlib monai[all]
-    
+
+          cp /data/segresults/best_model_batchsize4_epoch100_128.pt .
+
           # Run inference
           python inferenceseg.py \
             --model_path best_model_batchsize4_epoch100_128.pt \
             --subset 5 \
             --output_dir .
-          
-          # Copy important files to persistent storage
-          mkdir -p /data/inference_output
-          cp -r . /data/inference_output/
           
           echo "✅ Files copied to /data/inference_output/"
           echo "📊 Model performance: 87.3% dice - Ready for synthesis!"

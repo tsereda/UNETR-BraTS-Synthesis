@@ -81,34 +81,24 @@ class SynthesisModel(nn.Module):
             with torch.no_grad():
                 # DEBUG: Print encoder1.layer structure
                 print("DEBUG: encoder1.layer =", self.backbone.encoder1.layer)
-                if hasattr(self.backbone.encoder1, "layer"):
-                    layer = self.backbone.encoder1.layer
-                    if hasattr(layer, "conv"):
-                        print("DEBUG: encoder1.layer.conv =", layer.conv)
-                        conv_seq = layer.conv
-                        for name, m in conv_seq.named_modules():
-                            if isinstance(m, nn.Conv3d):
-                                print(f"DEBUG: Found Conv3d at {name}: {m}")
-                        # UnetResBlock: conv_seq is nn.Sequential of Convolution blocks
-                        conv_module = None
-                        for m in conv_seq.modules():
-                            # Try to find the first Conv3d in the hierarchy
-                            if isinstance(m, nn.Conv3d):
-                                conv_module = m
-                                break
-                        # If not found, try inside Convolution blocks
-                        if conv_module is None:
-                            for subm in conv_seq:
-                                # Each subm is likely a Convolution block
-                                if hasattr(subm, "conv") and isinstance(subm.conv, nn.Conv3d):
-                                    conv_module = subm.conv
-                                    break
-                else:
-                    conv_module = None
+                conv_module = None
+                # Try to get the first Conv3d directly (MONAI UnetResBlock: conv1.conv)
+                try:
+                    conv_module = self.backbone.encoder1.layer.conv1.conv
+                    print("DEBUG: Using encoder1.layer.conv1.conv as input conv:", conv_module)
+                except AttributeError:
+                    pass
+                # Fallback: search all submodules for first Conv3d with in_channels==4
+                if conv_module is None or not isinstance(conv_module, nn.Conv3d) or conv_module.in_channels != 4:
+                    for name, m in self.backbone.encoder1.layer.named_modules():
+                        if isinstance(m, nn.Conv3d) and m.in_channels == 4:
+                            print(f"DEBUG: Fallback found Conv3d at {name}: {m}")
+                            conv_module = m
+                            break
                 if conv_module is None:
-                    raise AttributeError("Could not find Conv3d in encoder1.layer.conv or its submodules. Please check model structure.")
+                    raise AttributeError("Could not find Conv3d with in_channels=4 in encoder1.layer. Please check model structure.")
                 old_weight = conv_module.weight.data
-                old_bias = conv_module.bias.data
+                old_bias = conv_module.bias.data if conv_module.bias is not None else torch.zeros_like(self.input_adapter.bias.data)
                 if input_channels == 3:
                     new_weight = old_weight[:, :3, :, :, :].clone()
                     self.input_adapter.weight.data = new_weight.mean(dim=1, keepdim=True).repeat(1, input_channels, 1, 1, 1)

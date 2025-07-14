@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: unetr-brats-pod
+  name: eval-unetr-brats
   labels:
-    app: unetr-brats
+    app: eval-unetr-brats
 spec:
   nodeSelector:
     topology.kubernetes.io/region: us-west

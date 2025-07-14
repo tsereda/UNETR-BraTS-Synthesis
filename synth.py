@@ -79,15 +79,15 @@ class SynthesisModel(nn.Module):
             self.input_adapter = nn.Conv3d(input_channels, 4, kernel_size=1, padding=0)
             # Initialize with pretrained weights (average across channels)
             with torch.no_grad():
-                # Try to use conv_in as the input conv layer for SwinUNETR
-                if hasattr(self.backbone, 'conv_in'):
-                    old_weight = self.backbone.conv_in.weight.data
-                else:
-                    raise AttributeError("SwinUNETR has no attribute 'conv_in'. Please check MONAI version and update input adapter initialization.")
+                # Use encoder1.conv as the input conv layer for SwinUNETR
+                old_weight = self.backbone.encoder1.conv.weight.data
+                old_bias = self.backbone.encoder1.conv.bias.data
                 if input_channels == 3:
                     # Average first 3 channels for 3-input case
                     new_weight = old_weight[:, :3, :, :, :].clone()
-                    self.input_adapter.weight.data = new_weight.mean(dim=1, keepdim=True).repeat(1, 4, 1, 1, 1)
+                    # Average across input channels, then repeat for input_channels
+                    self.input_adapter.weight.data = new_weight.mean(dim=1, keepdim=True).repeat(1, input_channels, 1, 1, 1)
+                    self.input_adapter.bias.data = old_bias.clone()
         else:
             self.input_adapter = nn.Identity()
         

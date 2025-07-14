@@ -22,7 +22,6 @@ from monai import transforms
 from monai.transforms import AsDiscrete, Activations
 from monai.networks.nets import SwinUNETR
 from monai.data import Dataset, DataLoader
-from monai.losses import L1Loss, MSELoss
 from monai.metrics import PSNRMetric, SSIMMetric
 
 # Suppress numpy warnings for cleaner output
@@ -105,13 +104,13 @@ class SynthesisModel(nn.Module):
         return self.backbone(x)
 
 
-class PerceptualLoss(nn.Module):
-    """Simple perceptual loss using pretrained features"""
+class SimplePerceptualLoss(nn.Module):
+    """Simple perceptual loss using L1 loss (placeholder for full perceptual loss)"""
     
     def __init__(self, weight=1.0):
         super().__init__()
         self.weight = weight
-        self.l1_loss = L1Loss()
+        self.l1_loss = nn.L1Loss()
         
     def forward(self, pred, target):
         # For now, just use L1 loss
@@ -124,9 +123,9 @@ class CombinedLoss(nn.Module):
     
     def __init__(self, l1_weight=1.0, mse_weight=0.5, perceptual_weight=0.1):
         super().__init__()
-        self.l1_loss = L1Loss()
-        self.mse_loss = MSELoss()
-        self.perceptual_loss = PerceptualLoss(weight=perceptual_weight)
+        self.l1_loss = nn.L1Loss()
+        self.mse_loss = nn.MSELoss()
+        self.perceptual_loss = SimplePerceptualLoss(weight=perceptual_weight)
         self.l1_weight = l1_weight
         self.mse_weight = mse_weight
         
@@ -292,7 +291,7 @@ def train_epoch(model, loader, optimizer, epoch, loss_func, max_epochs, target_m
                 "batch": idx + 1
             })
             
-            # Log sample synthesis every 20 batches
+            # Log sample synthesis every 100 batches
             if (idx + 1) % 100 == 0:
                 log_batch_synthesis(model, input_data, target_data, batch_data, epoch, idx, target_modality)
         
@@ -331,9 +330,7 @@ def val_epoch(model, loader, epoch, max_epochs, target_modality):
     start_time = time.time()
     
     # Initialize metrics
-    psnr_metric = PSNRMetric(max_val=1.0)
-    ssim_metric = SSIMMetric(spatial_dims=3)
-    l1_loss = L1Loss()
+    l1_loss = nn.L1Loss()
     
     run_psnr = AverageMeter()
     run_ssim = AverageMeter()
@@ -353,6 +350,8 @@ def val_epoch(model, loader, epoch, max_epochs, target_modality):
                 
                 # PSNR and SSIM (handle potential errors)
                 try:
+                    psnr_metric = PSNRMetric(max_val=1.0)
+                    ssim_metric = SSIMMetric(spatial_dims=3)
                     psnr_val = psnr_metric(predicted, target_data).item()
                     ssim_val = ssim_metric(predicted, target_data).item()
                 except:

@@ -79,9 +79,27 @@ class SynthesisModel(nn.Module):
             self.input_adapter = nn.Conv3d(input_channels, 4, kernel_size=1, padding=0)
             # Initialize with pretrained weights (average across channels)
             with torch.no_grad():
-                # Use encoder1.conv as the input conv layer for SwinUNETR
-                old_weight = self.backbone.encoder1.conv.weight.data
-                old_bias = self.backbone.encoder1.conv.bias.data
+                # Print encoder1 attributes to help debug
+                print("encoder1 attributes:", dir(self.backbone.encoder1))
+                # Try common attribute names for the input conv
+                conv_attr = None
+                for attr in ["conv", "block", "layers", "layer0", "layer", "main", "net"]:
+                    if hasattr(self.backbone.encoder1, attr):
+                        conv_attr = attr
+                        break
+                if conv_attr is None:
+                    raise AttributeError("Could not find input conv in encoder1. Please check encoder1 attributes above.")
+                conv_module = getattr(self.backbone.encoder1, conv_attr)
+                # If it's a Sequential or list, get the first Conv3d
+                if isinstance(conv_module, (nn.Sequential, list)):
+                    for m in conv_module:
+                        if isinstance(m, nn.Conv3d):
+                            conv_module = m
+                            break
+                if not isinstance(conv_module, nn.Conv3d):
+                    raise AttributeError(f"encoder1.{conv_attr} is not a Conv3d. Found type: {type(conv_module)}")
+                old_weight = conv_module.weight.data
+                old_bias = conv_module.bias.data
                 if input_channels == 3:
                     # Average first 3 channels for 3-input case
                     new_weight = old_weight[:, :3, :, :, :].clone()
@@ -534,6 +552,7 @@ def main():
     
     print(f"Training batches: {len(train_loader)}, Validation batches: {len(val_loader)}")
     
+    print("encoder1 attributes:", dir(self.backbone.encoder1))
     # Create synthesis model with pretrained weights
     model = SynthesisModel(
         pretrained_seg_path=args.pretrained_path,

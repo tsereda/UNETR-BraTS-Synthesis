@@ -79,18 +79,27 @@ class SynthesisModel(nn.Module):
             self.input_adapter = nn.Conv3d(input_channels, 4, kernel_size=1, padding=0)
             # Initialize with pretrained weights (average across channels)
             with torch.no_grad():
-                # Find the first Conv3d inside encoder1.layer.conv
+                # Try to find the first Conv3d inside encoder1.layer.conv, or inside encoder1.layer.conv[0].conv
                 conv_module = None
                 if hasattr(self.backbone.encoder1, "layer"):
                     layer = self.backbone.encoder1.layer
                     if hasattr(layer, "conv"):
                         conv_seq = layer.conv
+                        # UnetResBlock: conv_seq is nn.Sequential of Convolution blocks
                         for m in conv_seq.modules():
+                            # Try to find the first Conv3d in the hierarchy
                             if isinstance(m, nn.Conv3d):
                                 conv_module = m
                                 break
+                        # If not found, try inside Convolution blocks
+                        if conv_module is None:
+                            for subm in conv_seq:
+                                # Each subm is likely a Convolution block
+                                if hasattr(subm, "conv") and isinstance(subm.conv, nn.Conv3d):
+                                    conv_module = subm.conv
+                                    break
                 if conv_module is None:
-                    raise AttributeError("Could not find Conv3d in encoder1.layer.conv. Please check model structure.")
+                    raise AttributeError("Could not find Conv3d in encoder1.layer.conv or its submodules. Please check model structure.")
                 old_weight = conv_module.weight.data
                 old_bias = conv_module.bias.data
                 if input_channels == 3:

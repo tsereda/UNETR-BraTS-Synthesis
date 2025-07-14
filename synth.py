@@ -552,7 +552,7 @@ def main():
     
     print(f"Training batches: {len(train_loader)}, Validation batches: {len(val_loader)}")
     
-    print("encoder1 attributes:", dir(self.backbone.encoder1))
+    # Removed mistaken print statement that used 'self' in main()
     # Create synthesis model with pretrained weights
     model = SynthesisModel(
         pretrained_seg_path=args.pretrained_path,

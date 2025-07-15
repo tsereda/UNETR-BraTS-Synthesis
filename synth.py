@@ -51,63 +51,25 @@ class AverageMeter(object):
 class SynthesisModel(nn.Module):
     """Adapt SwinUNETR from segmentation to synthesis"""
     
-    def __init__(self, pretrained_seg_path=None, input_channels=3, output_channels=1):
+    def __init__(self, pretrained_seg_path=None, output_channels=1):
         super().__init__()
-        
-        # Load the original segmentation model architecture
+        # Always use 4 input channels
         self.backbone = SwinUNETR(
-            in_channels=4,  # Original model input
-            out_channels=3,  # Original model output
+            in_channels=4,
+            out_channels=3,
             feature_size=48,
             drop_rate=0.0,
             attn_drop_rate=0.0,
             dropout_path_rate=0.0,
             use_checkpoint=True,
         )
-        
-        # Load pretrained weights if provided
         if pretrained_seg_path and os.path.exists(pretrained_seg_path):
             print(f"Loading pretrained segmentation weights from: {pretrained_seg_path}")
             checkpoint = torch.load(pretrained_seg_path, map_location='cpu', weights_only=False)
             self.backbone.load_state_dict(checkpoint['model_state_dict'])
             print(f"✓ Loaded weights from epoch {checkpoint['epoch']}")
             print(f"✓ Segmentation dice: {checkpoint.get('val_acc_max', 'N/A')}")
-        
-        # Adapt input layer if needed (3 modalities instead of 4)
-        if input_channels != 4:
-            # Create new input layer
-            self.input_adapter = nn.Conv3d(input_channels, 4, kernel_size=1, padding=0)
-            # Initialize with pretrained weights (average across channels)
-            with torch.no_grad():
-                # DEBUG: Print encoder1.layer structure
-                print("DEBUG: encoder1.layer =", self.backbone.encoder1.layer)
-                conv_module = None
-                # Try to get the first Conv3d directly (MONAI UnetResBlock: conv1.conv)
-                try:
-                    conv_module = self.backbone.encoder1.layer.conv1.conv
-                    print("DEBUG: Using encoder1.layer.conv1.conv as input conv:", conv_module)
-                except AttributeError:
-                    pass
-                # Fallback: search all submodules for first Conv3d with in_channels==4
-                if conv_module is None or not isinstance(conv_module, nn.Conv3d) or conv_module.in_channels != 4:
-                    for name, m in self.backbone.encoder1.layer.named_modules():
-                        if isinstance(m, nn.Conv3d) and m.in_channels == 4:
-                            print(f"DEBUG: Fallback found Conv3d at {name}: {m}")
-                            conv_module = m
-                            break
-                if conv_module is None:
-                    raise AttributeError("Could not find Conv3d with in_channels=4 in encoder1.layer. Please check model structure.")
-                old_weight = conv_module.weight.data
-                old_bias = conv_module.bias.data if conv_module.bias is not None else torch.zeros_like(self.input_adapter.bias.data)
-                if input_channels == 3:
-                    new_weight = old_weight[:, :3, :, :, :].clone()
-                    self.input_adapter.weight.data = new_weight.mean(dim=1, keepdim=True).repeat(1, input_channels, 1, 1, 1)
-                    self.input_adapter.bias.data = old_bias.clone()
-        else:
-            self.input_adapter = nn.Identity()
-        
         # Replace output head for synthesis (1 channel output)
-        # UnetOutBlock does not have in_channels, so get from its conv layer
         in_channels = self.backbone.out.conv.in_channels
         self.backbone.out = nn.Conv3d(
             in_channels,
@@ -115,13 +77,9 @@ class SynthesisModel(nn.Module):
             kernel_size=1,
             padding=0
         )
-        
-        print(f"✓ Model adapted: {input_channels} input → {output_channels} output channels")
-    
+        print(f"✓ Model adapted: 4 input → {output_channels} output channels")
+
     def forward(self, x):
-        # Adapt input if necessary
-        x = self.input_adapter(x)
-        # Forward through backbone
         return self.backbone(x)
 
 
@@ -180,36 +138,36 @@ def find_brats_cases(data_dir, target_modality="T1CE"):
         "T1": "t1n.nii.gz",
         "T2": "t2w.nii.gz"
     }
-    
+
     for item in os.listdir(data_dir):
         if 'BraTS' in item and os.path.isdir(os.path.join(data_dir, item)):
             case_path = os.path.join(data_dir, item)
-            
             # Build file paths
             files = {}
             for modality, suffix in modality_files.items():
                 files[modality] = os.path.join(case_path, f"{item}-{suffix}")
-            
             # Check if all files exist
             if all(os.path.exists(f) for f in files.values()):
-                # Set up input/target for synthesis
+                # Always use 4 input channels: copy one modality if needed
                 input_modalities = [mod for mod in modality_files.keys() if mod != target_modality]
-                
+                input_images = [files[mod] for mod in input_modalities]
+                # Copy FLAIR (or T1CE if FLAIR is target) to keep 4 channels
+                if len(input_images) == 3:
+                    if target_modality != "FLAIR":
+                        input_images.append(files["FLAIR"])
+                    else:
+                        input_images.append(files["T1CE"])
                 case_data = {
-                    "input_image": [files[mod] for mod in input_modalities],
+                    "input_image": input_images,
                     "target_image": files[target_modality],
                     "case_id": item,
                     "target_modality": target_modality
                 }
-                
                 cases.append(case_data)
-                
-                # Progress update every 50 cases
                 if len(cases) % 50 == 0:
                     print(f"Found {len(cases)} valid synthesis cases so far...")
-    
     print(f"Finished scanning synthesis data. Total cases found: {len(cases)}")
-    print(f"Input modalities: {[mod for mod in modality_files.keys() if mod != target_modality]}")
+    print(f"Input modalities: always 4 (one copied if needed)")
     print(f"Target modality: {target_modality}")
     return cases
 
@@ -555,8 +513,7 @@ def main():
     # Create synthesis model with pretrained weights
     model = SynthesisModel(
         pretrained_seg_path=args.pretrained_path,
-        input_channels=3,  # 3 input modalities
-        output_channels=1  # 1 target modality
+        output_channels=1
     ).cuda()
     
     # Synthesis loss function

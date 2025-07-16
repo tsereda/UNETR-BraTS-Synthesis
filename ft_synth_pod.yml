@@ -47,10 +47,10 @@ spec:
         - name: WANDB_API_KEY
           valueFrom:
             secretKeyRef:
-              name: wandb-credentials
+              name: wandb-credentials-edu
               key: api-key  # Adjust this key name to match your secret
         - name: WANDB_PROJECT
-          value: "UNETR-BraTS-Synthesis"
+          value: "UNETR-BraTS-SegFinetuneToSynth"
         - name: WANDB_ENTITY
           value: "timgsereda"  # Replace with your W&B username/team
         - name: WANDB_MODE

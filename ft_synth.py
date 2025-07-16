@@ -97,27 +97,17 @@ class SimplePerceptualLoss(nn.Module):
         return self.weight * self.l1_loss(pred, target)
 
 
-class CombinedLoss(nn.Module):
-    """Combined loss for synthesis: L1 + MSE + Perceptual"""
-    
-    def __init__(self, l1_weight=1.0, mse_weight=0.5, perceptual_weight=0.1):
+from monai.losses import DiceLoss
+
+class DiceSynthesisLoss(nn.Module):
+    """Dice loss for synthesis (for single-channel output)"""
+    def __init__(self):
         super().__init__()
-        self.l1_loss = nn.L1Loss()
-        self.mse_loss = nn.MSELoss()
-        self.perceptual_loss = SimplePerceptualLoss(weight=perceptual_weight)
-        self.l1_weight = l1_weight
-        self.mse_weight = mse_weight
-        
+        self.dice = DiceLoss(include_background=True, to_onehot_y=False, sigmoid=True, reduction="mean")
+
     def forward(self, pred, target):
-        l1 = self.l1_loss(pred, target)
-        mse = self.mse_loss(pred, target)
-        perceptual = self.perceptual_loss(pred, target)
-        
-        total_loss = (self.l1_weight * l1 + 
-                     self.mse_weight * mse + 
-                     perceptual)
-        
-        return total_loss, {"l1": l1.item(), "mse": mse.item(), "perceptual": perceptual.item()}
+        loss = self.dice(pred, target)
+        return loss, {"dice": loss.item()}
 
 
 def find_brats_cases(data_dir, target_modality="T1CE"):
@@ -173,47 +163,39 @@ def find_brats_cases(data_dir, target_modality="T1CE"):
 
 
 def log_synthesis_samples(inputs, targets, predictions, case_names, epoch=None, batch_idx=None, target_modality="T1CE"):
-    """Log synthesis samples to W&B"""
+    """Log synthesis samples to W&B (show all three input modalities, no diff image)"""
     try:
         num_samples = len(inputs)
-        fig, axes = plt.subplots(num_samples, 4, figsize=(16, 4 * num_samples))
-        
+        fig, axes = plt.subplots(num_samples, 5, figsize=(20, 4 * num_samples))
+
         # Handle single sample case
         if num_samples == 1:
             axes = axes.reshape(1, -1)
-        
+
         for i in range(num_samples):
             slice_idx = inputs[i].shape[-1] // 2
-            
-            # Input modality (show first channel)
-            axes[i, 0].imshow(inputs[i][0, :, :, slice_idx], cmap='gray')
-            axes[i, 0].set_title('Input (First Modality)')
-            axes[i, 0].axis('off')
-            
+            # Show all three input modalities (channels 0,1,2)
+            for ch in range(3):
+                axes[i, ch].imshow(inputs[i][ch, :, :, slice_idx], cmap='gray')
+                axes[i, ch].set_title(f'Input Modality {ch+1}')
+                axes[i, ch].axis('off')
             # Target modality
-            axes[i, 1].imshow(targets[i][0, :, :, slice_idx], cmap='gray')
-            axes[i, 1].set_title(f'Target ({target_modality})')
-            axes[i, 1].axis('off')
-            
-            # Predicted modality
-            axes[i, 2].imshow(predictions[i][0, :, :, slice_idx], cmap='gray')
-            axes[i, 2].set_title(f'Predicted ({target_modality})')
-            axes[i, 2].axis('off')
-            
-            # Difference map
-            diff = np.abs(targets[i][0, :, :, slice_idx] - predictions[i][0, :, :, slice_idx])
-            axes[i, 3].imshow(diff, cmap='hot')
-            axes[i, 3].set_title('Absolute Difference')
+            axes[i, 3].imshow(targets[i][0, :, :, slice_idx], cmap='gray')
+            axes[i, 3].set_title(f'Target ({target_modality})')
             axes[i, 3].axis('off')
-        
+            # Predicted modality
+            axes[i, 4].imshow(predictions[i][0, :, :, slice_idx], cmap='gray')
+            axes[i, 4].set_title(f'Predicted ({target_modality})')
+            axes[i, 4].axis('off')
+
         plt.tight_layout()
-        
+
         title = f"synthesis_samples_{target_modality.lower()}"
         if epoch is not None:
             title += f"_epoch_{epoch}"
         if batch_idx is not None:
             title += f"_batch_{batch_idx}"
-            
+
         wandb.log({f"synthesis/{title}": wandb.Image(fig)})
         plt.close(fig)
     except Exception as e:
@@ -539,7 +521,7 @@ def main():
     ).cuda()
     
     # Synthesis loss function
-    loss_func = CombinedLoss(l1_weight=1.0, mse_weight=0.5, perceptual_weight=0.1)
+    loss_func = DiceSynthesisLoss()
     
     # Training setup
     optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5, weight_decay=1e-5)  # Lower LR for transfer

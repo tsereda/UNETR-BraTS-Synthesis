@@ -65,7 +65,7 @@ spec:
               # synapse config
               # synapse get -r syn51514105 
 
-              git clone https://github.com/tsereda/UNETR-BraTS-Synthesis.git ${REPO_PATH}
+              git clone -b fixval https://github.com/tsereda/UNETR-BraTS-Synthesis.git ${REPO_PATH}
               cd ${REPO_PATH}
               
               sudo apt-get update && sudo apt-get install -y p7zip-full wget git
@@ -158,11 +158,16 @@ spec:
               python fix_cuda.py
               
               # Run with enhanced error handling
-              python ft_synth.py --pretrained_path best_model_batchsize4_epoch100_128.pt --save_path /data/ --max_epochs 1 --target_modality FLAIR
+              python ft_synth.py --pretrained_path best_model_batchsize4_epoch100_128.pt --save_path test_flair.pt --max_epochs 1 --target_modality FLAIR
+              ls -la
+              sudo cp test_flair.pt /data/
               ls -la /data/
-              python ft_synth.py --pretrained_path best_model_batchsize4_epoch100_128.pt --save_path /data/ --max_epochs 1 --target_modality T1CE
-              python ft_synth.py --pretrained_path best_model_batchsize4_epoch100_128.pt --save_path /data/ --max_epochs 1 --target_modality T1
-              python ft_synth.py --pretrained_path best_model_batchsize4_epoch100_128.pt --save_path /data/ --max_epochs 1 --target_modality T2
+              python ft_synth.py --pretrained_path best_model_batchsize4_epoch100_128.pt --save_path /data/test_t1ce.pt --max_epochs 1 --target_modality T1CE
+              python ft_synth.py --pretrained_path best_model_batchsize4_epoch100_128.pt --save_path /data/test_t1.pt --max_epochs 1 --target_modality T1
+              python ft_synth.py --pretrained_path best_model_batchsize4_epoch100_128.pt --save_path /data/test_t2.pt --max_epochs 1 --target_modality T2
+              sudo cp test_t1ce.pt /data/
+              sudo cp test_t1.pt /data/
+              sudo cp test_t2.pt /data/
               ls -la /data/
 
               # Run inference

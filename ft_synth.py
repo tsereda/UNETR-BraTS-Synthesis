@@ -485,6 +485,7 @@ def main():
 
     train_transform = transforms.Compose([
         transforms.LoadImaged(keys=["input_image", "target_image"]),
+        transforms.EnsureChannelFirstd(keys=["target_image"]),
         debug_shape,  # Debug print after loading
         transforms.NormalizeIntensityd(keys=["input_image", "target_image"], nonzero=True, channel_wise=True),
         transforms.CropForegroundd(

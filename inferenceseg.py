@@ -66,15 +66,14 @@ def find_brats_cases(data_dir, dataset_type="train"):
                         os.path.join(case_path, t1_file),
                         os.path.join(case_path, t2_file)
                     ],
-                    "case_id": item
+                    "case_id": item,
+                    # Store reference path for robust NIfTI saving
+                    "reference_path": os.path.join(case_path, flair_file)
                 }
-                
                 # Add label only for training data
                 if dataset_type == "train":
                     case_data["label"] = os.path.join(case_path, seg_file)
-                
                 cases.append(case_data)
-                
                 # Progress update every 50 cases
                 if len(cases) % 50 == 0:
                     print(f"Found {len(cases)} valid {dataset_type} cases so far...")
@@ -200,18 +199,10 @@ def run_inference(model, loader, model_inferer, post_sigmoid, post_pred, output_
                 case_output_dir = os.path.join(output_dir, case_id)
                 os.makedirs(case_output_dir, exist_ok=True)
                 
-                # Use parent folder of first input image as reference for affine/header
+                # Use reference_path from batch_data for robust NIfTI saving
                 print(f"Batch keys: {list(batch_data.keys())}")  # Debug: see available keys
-                reference_path = None
-                if "image" in batch_data and isinstance(batch_data["image"][0], str):
-                    parent_folder = os.path.dirname(batch_data["image"][0])
-                    nii_files = sorted([f for f in os.listdir(parent_folder) if f.endswith(".nii.gz")])
-                    if nii_files:
-                        reference_path = os.path.join(parent_folder, nii_files[0])
-                    else:
-                        print(f"Error: No .nii.gz files found in {parent_folder}")
-                        continue
-                else:
+                reference_path = batch_data.get("reference_path", None)
+                if reference_path is None:
                     print(f"Error processing case {idx}: Cannot determine reference_path for NIfTI saving.")
                     continue
                 pred_path = os.path.join(case_output_dir, f"{case_id}_pred.nii.gz")
@@ -314,12 +305,14 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     
     # Find data
-    base_dir = "/app/UNETR-BraTS-Synthesis"
+    # Use symlink directly for data_dir if it exists
+    symlink_train = os.path.join("/app/UNETR-BraTS-Synthesis", "ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData")
+    symlink_val = os.path.join("/app/UNETR-BraTS-Synthesis", "ASNR-MICCAI-BraTS2023-GLI-Challenge-ValidationData")
     if args.use_val_data:
-        data_dir = os.path.join(base_dir, "ASNR-MICCAI-BraTS2023-GLI-Challenge-ValidationData")
+        data_dir = symlink_val if os.path.exists(symlink_val) else os.path.join("/data", "ASNR-MICCAI-BraTS2023-GLI-Challenge-ValidationData")
         dataset_type = "val"
     else:
-        data_dir = os.path.join(base_dir, args.data_dir)
+        data_dir = symlink_train if os.path.exists(symlink_train) else os.path.join("/data", "ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData")
         dataset_type = "train"
     
     print(f"Data directory: {data_dir}")

@@ -36,13 +36,13 @@ spec:
       volumeMounts:
         - name: workspace
           mountPath: /app
-        - name: data
+        - name: data1
           mountPath: /data1
-        - name: data
+        - name: data2
           mountPath: /data2
-        - name: data
+        - name: data3
           mountPath: /data3
-        - name: data
+        - name: data4
           mountPath: /data4
         - name: shm
           mountPath: /dev/shm

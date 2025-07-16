@@ -187,13 +187,13 @@ def log_synthesis_samples(inputs, targets, predictions, case_names, epoch=None, 
             caption = f"Case: {case_names[i]} | Epoch: {epoch if epoch is not None else ''} | Batch: {batch_idx if batch_idx is not None else ''}"
             images.append(wandb.Image(img_uint8, caption=caption))
             captions.append(caption)
-        # Log as a list for slider compatibility
+        # Use a consistent key for slider functionality
         title = f"synthesis_slider_{target_modality.lower()}"
-        if epoch is not None:
-            title += f"_epoch_{epoch}"
-        if batch_idx is not None:
-            title += f"_batch_{batch_idx}"
-        wandb.log({f"synthesis/{title}": images})
+        # Log with step=epoch for slider, and always log 'epoch' as a metric
+        wandb.log({
+            f"synthesis/{title}": images,
+            "epoch": epoch
+        }, step=epoch)
     except Exception as e:
         print(f"Error logging synthesis samples: {e}")
 
@@ -409,6 +409,9 @@ def main():
             "loss": "Dice"
         }
     )
+    # --- W&B custom metric setup for slider functionality ---
+    wandb.define_metric("epoch", hidden=True)
+    wandb.define_metric("synthesis/*", step_metric="epoch")
     
     # Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

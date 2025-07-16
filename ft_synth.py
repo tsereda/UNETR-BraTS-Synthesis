@@ -472,8 +472,20 @@ def main():
     # Transforms for synthesis
     roi = (128, 128, 128)
     
+    def debug_shape(data):
+        # Print shapes for debugging
+        input_img = data["input_image"]
+        target_img = data["target_image"]
+        if isinstance(input_img, list):
+            print("input_image is a list, shapes:", [np.array(i).shape for i in input_img])
+        else:
+            print("input_image shape:", np.array(input_img).shape)
+        print("target_image shape:", np.array(target_img).shape)
+        return data
+
     train_transform = transforms.Compose([
         transforms.LoadImaged(keys=["input_image", "target_image"]),
+        debug_shape,  # Debug print after loading
         transforms.NormalizeIntensityd(keys=["input_image", "target_image"], nonzero=True, channel_wise=True),
         transforms.CropForegroundd(
             keys=["input_image", "target_image"],

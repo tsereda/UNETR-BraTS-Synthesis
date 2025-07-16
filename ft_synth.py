@@ -410,7 +410,7 @@ def main():
             "learning_rate": 5e-5,
             "weight_decay": 1e-5,
             "scheduler": "CosineAnnealingLR",
-            "loss": "Combined L1 + MSE + Perceptual"
+            "loss": "Dice"
         }
     )
     
@@ -526,7 +526,7 @@ def main():
     print(f"\n=== SYNTHESIS TRAINING CONFIGURATION ===")
     print(f"Max epochs: {args.max_epochs}")
     print(f"Learning rate: 5e-5 (reduced for transfer learning)")
-    print(f"Loss: Combined L1 + MSE + Perceptual")
+    print(f"Loss: Dice")
     print(f"ROI size: {roi}")
     
     best_l1 = float('inf')

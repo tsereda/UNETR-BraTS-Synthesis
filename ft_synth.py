@@ -423,7 +423,15 @@ def main():
         config={
             "target_modality": args.target_modality,
             "max_epochs": args.max_epochs,
-            "pretrained_path": args.pretrained_path
+            "pretrained_path": args.pretrained_path,
+            "save_path": args.save_path,
+            "batch_size": 2,
+            "roi": roi,
+            "optimizer": "AdamW",
+            "learning_rate": 5e-5,
+            "weight_decay": 1e-5,
+            "scheduler": "CosineAnnealingLR",
+            "loss": "Combined L1 + MSE + Perceptual"
         }
     )
     
@@ -514,8 +522,9 @@ def main():
     ])
     
     # Data loaders
+    batch_size = 2
     train_ds = Dataset(data=train_cases, transform=train_transform)
-    train_loader = DataLoader(train_ds, batch_size=2, shuffle=True, num_workers=6, pin_memory=True)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=6, pin_memory=True)
     
     val_ds = Dataset(data=val_cases, transform=val_transform)
     val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=4, pin_memory=True)
@@ -545,6 +554,8 @@ def main():
     best_l1 = float('inf')
     
     for epoch in range(args.max_epochs):
+        # Optionally log gradients and parameter histograms every epoch
+        wandb.watch(model, log="all", log_freq=100)
         print(f"\n=== EPOCH {epoch+1}/{args.max_epochs} ===")
         epoch_time = time.time()
         
@@ -616,6 +627,10 @@ def main():
     print(f"✓ Best L1 score: {best_l1:.6f}")
     print(f"✓ Target modality: {args.target_modality}")
     print(f"✓ Best model saved to: {args.save_path}")
+    # Log summary to W&B
+    wandb.run.summary["best_l1"] = best_l1
+    wandb.run.summary["target_modality"] = args.target_modality
+    wandb.run.summary["best_model_path"] = args.save_path
     wandb.finish()
 
 

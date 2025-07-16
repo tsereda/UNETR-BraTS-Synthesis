@@ -2,6 +2,7 @@
 """
 BraTS Modality Synthesis - Transfer Learning from Segmentation Model
 ENHANCED VERSION: Frequent sample logging with all input modalities visible
+FIXED: Spatial dimension errors in validation
 """
 
 import os
@@ -20,7 +21,7 @@ import wandb
 
 from monai.inferers import sliding_window_inference
 from monai import transforms
-from monai.transforms import AsDiscrete, Activations
+from monai.transforms import AsDiscrete, Activations, DivisiblePadd, Resized
 from monai.networks.nets import SwinUNETR
 from monai.data import Dataset, DataLoader
 from monai.metrics import PSNRMetric, SSIMMetric
@@ -349,7 +350,7 @@ def frequent_sample_train_epoch(model, loader, optimizer, epoch, loss_func, max_
 
 
 def frequent_sample_val_epoch(model, loader, epoch, max_epochs, target_modality, logger):
-    """Validation with frequent sample logging"""
+    """Validation with frequent sample logging - FIXED for spatial dimension issues"""
     model.eval()
     run_l1 = AverageMeter()
     run_psnr = AverageMeter()
@@ -358,12 +359,28 @@ def frequent_sample_val_epoch(model, loader, epoch, max_epochs, target_modality,
     # Collect samples for logging
     sample_inputs, sample_targets, sample_preds, sample_names = [], [], [], []
     
+    # ROI size for sliding window inference
+    roi = (128, 128, 128)
+    
     with torch.no_grad():
         for idx, batch_data in enumerate(loader):
             try:
                 input_data = batch_data["input_image"].cuda()
                 target_data = batch_data["target_image"].cuda()
-                predicted = model(input_data)
+                
+                # Use sliding window inference for variable-sized validation images
+                # This handles the spatial dimension divisibility issue
+                predicted = sliding_window_inference(
+                    inputs=input_data,
+                    roi_size=roi,
+                    sw_batch_size=1,
+                    predictor=model,
+                    overlap=0.5,
+                    mode="gaussian",
+                    sigma_scale=0.125,
+                    padding_mode="constant",
+                    cval=0.0,
+                )
                 
                 # Compute metrics
                 l1_loss = torch.nn.functional.l1_loss(predicted, target_data)
@@ -377,8 +394,11 @@ def frequent_sample_val_epoch(model, loader, epoch, max_epochs, target_modality,
                     ssim_val = ssim_metric(predicted, target_data).item()
                     run_psnr.update(psnr_val, n=input_data.shape[0])
                     run_ssim.update(ssim_val, n=input_data.shape[0])
-                except:
-                    pass  # Skip if metrics fail
+                except Exception as metric_error:
+                    print(f"Warning: Metric computation failed for batch {idx}: {metric_error}")
+                    # Set default values if metrics fail
+                    run_psnr.update(0.0, n=input_data.shape[0])
+                    run_ssim.update(0.0, n=input_data.shape[0])
                 
                 # Collect samples (more samples for better coverage)
                 if len(sample_inputs) < 8:  # Increased from 3 to 8
@@ -392,6 +412,10 @@ def frequent_sample_val_epoch(model, loader, epoch, max_epochs, target_modality,
                     
             except Exception as e:
                 print(f"Error in validation step {idx}: {e}")
+                # Log more details about the error
+                if hasattr(e, 'args') and 'spatial dimensions' in str(e):
+                    print(f"  Input shape: {input_data.shape if 'input_data' in locals() else 'N/A'}")
+                    print(f"  Target shape: {target_data.shape if 'target_data' in locals() else 'N/A'}")
                 continue
     
     # Log validation samples EVERY epoch (not just every 5)
@@ -401,6 +425,57 @@ def frequent_sample_val_epoch(model, loader, epoch, max_epochs, target_modality,
     )
     
     return {"l1": run_l1.avg, "psnr": run_psnr.avg, "ssim": run_ssim.avg}
+
+
+def get_fixed_transforms(roi):
+    """Get fixed transforms that handle spatial dimensions properly"""
+    
+    # Training transform (unchanged - already works)
+    train_transform = transforms.Compose([
+        transforms.LoadImaged(keys=["input_image", "target_image"]),
+        transforms.EnsureChannelFirstd(keys=["target_image"]),
+        transforms.NormalizeIntensityd(keys=["input_image", "target_image"], nonzero=True, channel_wise=True),
+        transforms.CropForegroundd(
+            keys=["input_image", "target_image"],
+            source_key="input_image",
+            k_divisible=[roi[0], roi[1], roi[2]],
+            allow_smaller=True,
+        ),
+        transforms.RandSpatialCropd(
+            keys=["input_image", "target_image"],
+            roi_size=[roi[0], roi[1], roi[2]],
+            random_size=False,
+        ),
+        # Data augmentation
+        transforms.RandFlipd(keys=["input_image", "target_image"], prob=0.5, spatial_axis=0),
+        transforms.RandFlipd(keys=["input_image", "target_image"], prob=0.5, spatial_axis=1),
+        transforms.RandFlipd(keys=["input_image", "target_image"], prob=0.5, spatial_axis=2),
+        transforms.RandRotate90d(keys=["input_image", "target_image"], prob=0.3, spatial_axes=(0, 1)),
+        transforms.RandScaleIntensityd(keys=["input_image", "target_image"], factors=0.1, prob=0.5),
+        transforms.RandShiftIntensityd(keys=["input_image", "target_image"], offsets=0.1, prob=0.5),
+    ])
+    
+    # FIXED validation transform - handles spatial dimensions properly
+    val_transform = transforms.Compose([
+        transforms.LoadImaged(keys=["input_image", "target_image"]),
+        transforms.EnsureChannelFirstd(keys=["target_image"]),
+        transforms.NormalizeIntensityd(keys=["input_image", "target_image"], nonzero=True, channel_wise=True),
+        transforms.CropForegroundd(
+            keys=["input_image", "target_image"],
+            source_key="input_image",
+            k_divisible=[32, 32, 32],  # Ensure divisible by 32 for SwinUNETR
+            allow_smaller=True,
+        ),
+        # Pad to make dimensions divisible by 32
+        transforms.DivisiblePadd(
+            keys=["input_image", "target_image"],
+            k=32,
+            mode="constant",
+            constant_values=0,
+        ),
+    ])
+    
+    return train_transform, val_transform
 
 
 def parse_args():
@@ -434,7 +509,7 @@ def main():
     roi = (128, 128, 128)
     wandb.init(
         project="BraTS2025",
-        name=f"synthesis_{args.target_modality.lower()}",
+        name=f"synthesis_{args.target_modality.lower()}_fixed",
         config={
             "target_modality": args.target_modality,
             "max_epochs": args.max_epochs,
@@ -451,11 +526,13 @@ def main():
             "logging_strategy": "frequent_samples_all_inputs",
             "sample_frequency": "every_15_batches_early_epochs",
             "validation_samples": "every_epoch_8_samples",
-            "input_modalities_shown": "all_3_plus_target_and_prediction"
+            "input_modalities_shown": "all_3_plus_target_and_prediction",
+            "spatial_fix": "sliding_window_inference_and_divisible_padding",
+            "version": "fixed_validation"
         }
     )
     
-    print("✓ WandB initialized for frequent sample logging with all input modalities")
+    print("✓ WandB initialized for frequent sample logging with FIXED spatial dimensions")
     
     # Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -499,35 +576,8 @@ def main():
         "dataset/pretrained_model": args.pretrained_path
     })
     
-    # Transforms for synthesis
-    train_transform = transforms.Compose([
-        transforms.LoadImaged(keys=["input_image", "target_image"]),
-        transforms.EnsureChannelFirstd(keys=["target_image"]),
-        transforms.NormalizeIntensityd(keys=["input_image", "target_image"], nonzero=True, channel_wise=True),
-        transforms.CropForegroundd(
-            keys=["input_image", "target_image"],
-            source_key="input_image",
-            k_divisible=[roi[0], roi[1], roi[2]],
-            allow_smaller=True,
-        ),
-        transforms.RandSpatialCropd(
-            keys=["input_image", "target_image"],
-            roi_size=[roi[0], roi[1], roi[2]],
-            random_size=False,
-        ),
-        # Data augmentation
-        transforms.RandFlipd(keys=["input_image", "target_image"], prob=0.5, spatial_axis=0),
-        transforms.RandFlipd(keys=["input_image", "target_image"], prob=0.5, spatial_axis=1),
-        transforms.RandFlipd(keys=["input_image", "target_image"], prob=0.5, spatial_axis=2),
-        transforms.RandRotate90d(keys=["input_image", "target_image"], prob=0.3, spatial_axes=(0, 1)),
-        transforms.RandScaleIntensityd(keys=["input_image", "target_image"], factors=0.1, prob=0.5),
-        transforms.RandShiftIntensityd(keys=["input_image", "target_image"], offsets=0.1, prob=0.5),
-    ])
-    
-    val_transform = transforms.Compose([
-        transforms.LoadImaged(keys=["input_image", "target_image"]),
-        transforms.NormalizeIntensityd(keys=["input_image", "target_image"], nonzero=True, channel_wise=True),
-    ])
+    # Get FIXED transforms for synthesis
+    train_transform, val_transform = get_fixed_transforms(roi)
     
     # Data loaders
     batch_size = 2
@@ -564,6 +614,7 @@ def main():
     print(f"Training samples: Every 15 batches (early epochs) → 50 batches (later)")
     print(f"Validation samples: Every epoch, up to 8 samples")
     print(f"Showing all input modalities: {logger.input_modalities}")
+    print(f"SPATIAL DIMENSION FIX: Sliding window inference + divisible padding")
     
     best_l1 = float('inf')
     
@@ -579,7 +630,7 @@ def main():
 
         print(f"EPOCH {epoch + 1} COMPLETE, avg_loss: {train_loss:.4f}, time: {time.time() - epoch_start:.2f}s")
 
-        # Validation with samples every epoch
+        # Validation with samples every epoch - FIXED for spatial dimensions
         epoch_time = time.time()
         val_metrics = frequent_sample_val_epoch(
             model, val_loader, epoch, args.max_epochs, args.target_modality, logger
@@ -608,7 +659,8 @@ def main():
                     'best_l1': best_l1,
                     'val_metrics': val_metrics,
                     'target_modality': args.target_modality,
-                    'pretrained_from': args.pretrained_path
+                    'pretrained_from': args.pretrained_path,
+                    'version': 'fixed_validation'
                 }, args.save_path)
                 print(f"✓ Best synthesis model saved to: {args.save_path}")
             except Exception as e:
@@ -623,6 +675,7 @@ def main():
     print(f"✓ Target modality: {args.target_modality}")
     print(f"✓ Best model saved to: {args.save_path}")
     print(f"🔍 All input modalities were visible in samples")
+    print(f"🔧 Spatial dimension issues FIXED with sliding window inference")
     
     # Log summary to W&B
     wandb.run.summary["best_l1"] = best_l1
@@ -630,6 +683,8 @@ def main():
     wandb.run.summary["best_model_path"] = args.save_path
     wandb.run.summary["total_samples_logged"] = logger.samples_logged
     wandb.run.summary["logging_strategy"] = "frequent_samples_all_inputs"
+    wandb.run.summary["spatial_fix"] = "sliding_window_inference_and_divisible_padding"
+    wandb.run.summary["version"] = "fixed_validation"
     wandb.finish()
 
 

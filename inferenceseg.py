@@ -202,6 +202,8 @@ def run_inference(model, loader, model_inferer, post_sigmoid, post_pred, output_
                 # Use reference_path from batch_data for robust NIfTI saving
                 print(f"Batch keys: {list(batch_data.keys())}")  # Debug: see available keys
                 reference_path = batch_data.get("reference_path", None)
+                if isinstance(reference_path, list):
+                    reference_path = reference_path[0]
                 if reference_path is None:
                     print(f"Error processing case {idx}: Cannot determine reference_path for NIfTI saving.")
                     continue

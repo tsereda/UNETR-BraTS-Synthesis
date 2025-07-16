@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fets-pod
+spec:
+  containers:
+  - name: fets-container
+    image: gitlab-registry.nrp-nautilus.io/timothy.sereda/brats2025:1.0.2
+    command: ["/bin/bash"]
+    args: 
+      - -c
+      - |
+
+        tail -f /dev/null

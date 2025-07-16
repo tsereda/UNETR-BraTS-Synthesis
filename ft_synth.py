@@ -189,11 +189,12 @@ def log_synthesis_samples(inputs, targets, predictions, case_names, epoch=None, 
             captions.append(caption)
         # Use a consistent key for slider functionality
         title = f"synthesis_slider_{target_modality.lower()}"
-        # Log with step=epoch for slider, and always log 'epoch' as a metric
+        # Log with step=epoch+1 for slider, and always log 'epoch' as a metric (to match main loop)
+        log_step = epoch + 1 if epoch is not None else None
         wandb.log({
             f"synthesis/{title}": images,
-            "epoch": epoch
-        }, step=epoch)
+            "epoch": log_step
+        }, step=log_step)
     except Exception as e:
         print(f"Error logging synthesis samples: {e}")
 

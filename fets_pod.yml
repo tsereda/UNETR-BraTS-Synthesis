@@ -15,4 +15,15 @@ spec:
       - |
         apt-get update && apt-get install -y git
         echo "Container started successfully!"
+
+        ${fets_root_dir}/bin/FeTS_CLI_Segment -d /path/to/output/DataForFeTS \ # data directory after invoking ${fets_root_dir}/bin/PrepareDataset
+
+          -a fets_singlet,fets_triplet \ # can be used with all pre-trained models currently available in FeTS
+
+          -lF STAPLE,ITKVoting,SIMPLE,MajorityVoting \ # if a single architecture is used, this parameter is ignored
+
+          -g 1 \ # '0': cpu, '1': request gpu
+
+          -t 0 # '0': inference mode, '1': training mode
+
         tail -f /dev/null

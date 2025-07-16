@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 BraTS Modality Synthesis - Transfer Learning from Segmentation Model
-FIXED VERSION: Properly handles WandB logging for slider compatibility
+ENHANCED VERSION: Frequent sample logging with all input modalities visible
 """
 
 import os
@@ -111,6 +111,144 @@ class DiceSynthesisLoss(nn.Module):
         return loss, {"dice": loss.item()}
 
 
+class FrequentSampleLogger:
+    """WandB logger for frequent synthesis sample tracking"""
+    
+    def __init__(self, target_modality):
+        self.target_modality = target_modality
+        self.step = 0
+        self.samples_logged = 0
+        
+        # Define input modality names based on target
+        all_modalities = ["FLAIR", "T1CE", "T1", "T2"]
+        self.input_modalities = [mod for mod in all_modalities if mod != target_modality]
+        print(f"Input modalities: {self.input_modalities}")
+        print(f"Target modality: {target_modality}")
+        
+    def log_training_metrics(self, epoch, batch_idx, total_batches, loss, loss_components, lr):
+        """Log training metrics - reasonable frequency"""
+        # Log every 25 batches or 5% of epoch progress
+        log_frequency = max(25, total_batches // 20)
+        
+        if batch_idx % log_frequency == 0:
+            wandb.log({
+                "train/loss": loss,
+                "train/dice_loss": loss_components["dice"],
+                "train/learning_rate": lr,
+                "train/epoch": epoch + 1,
+                "train/batch": batch_idx,
+                "train/progress": (epoch * total_batches + batch_idx) / (50 * total_batches)
+            }, step=self.step)
+            self.step += 1
+    
+    def log_training_samples(self, model, input_data, target_data, batch_data, epoch, batch_idx):
+        """Log samples DURING training - early and often!"""
+        try:
+            model.eval()
+            with torch.no_grad():
+                predicted = model(input_data[:1])  # Just first sample to save memory
+                
+                # Get case name
+                case_name = batch_data.get("case_id", [f"epoch{epoch+1}_batch{batch_idx}"])[0]
+                
+                # Log single sample with all 3 input modalities
+                self._log_detailed_sample(
+                    input_data[0].cpu().numpy(),
+                    target_data[0].cpu().numpy(), 
+                    predicted[0].cpu().numpy(),
+                    case_name,
+                    f"TRAINING | Epoch {epoch+1} Batch {batch_idx}"
+                )
+            model.train()
+        except Exception as e:
+            print(f"Error logging training sample: {e}")
+    
+    def log_validation_samples(self, inputs, targets, predictions, case_names, epoch, split="val"):
+        """Log validation samples - show more detail"""
+        try:
+            for i in range(min(5, len(inputs))):  # Show up to 5 validation samples
+                self._log_detailed_sample(
+                    inputs[i], targets[i], predictions[i], case_names[i],
+                    f"VALIDATION | Epoch {epoch+1}"
+                )
+        except Exception as e:
+            print(f"Error logging validation samples: {e}")
+    
+    def _log_detailed_sample(self, input_vol, target_vol, pred_vol, case_name, stage_info):
+        """Log detailed sample showing all 3 input modalities"""
+        try:
+            # Get middle slice
+            slice_idx = input_vol.shape[-1] // 2
+            
+            # Extract all slices
+            input1_slice = input_vol[0, :, :, slice_idx]  # First input modality
+            input2_slice = input_vol[1, :, :, slice_idx]  # Second input modality  
+            input3_slice = input_vol[2, :, :, slice_idx]  # Third input modality
+            target_slice = target_vol[0, :, :, slice_idx]
+            pred_slice = pred_vol[0, :, :, slice_idx]
+            
+            # Create comprehensive visualization
+            # Layout: [Input1 | Input2 | Input3 | Target | Prediction]
+            all_images = [input1_slice, input2_slice, input3_slice, target_slice, pred_slice]
+            
+            # Normalize each image individually for better contrast
+            normalized_images = []
+            for img in all_images:
+                img_norm = (img - img.min()) / (img.max() - img.min() + 1e-8)
+                normalized_images.append(img_norm)
+            
+            # Concatenate horizontally
+            comparison = np.concatenate(normalized_images, axis=1)
+            
+            # Convert to RGB for wandb
+            comparison_rgb = np.stack([comparison] * 3, axis=-1)
+            
+            # Create detailed caption
+            modality_labels = " | ".join([
+                f"{self.input_modalities[0]} INPUT",
+                f"{self.input_modalities[1]} INPUT", 
+                f"{self.input_modalities[2]} INPUT",
+                f"{self.target_modality} TARGET",
+                f"{self.target_modality} PREDICTED"
+            ])
+            
+            caption = f"{stage_info} | {case_name} | {modality_labels}"
+            
+            # Log with sample counter for easy tracking
+            wandb.log({
+                f"samples/detailed_synthesis": wandb.Image(comparison_rgb, caption=caption),
+                f"samples/count": self.samples_logged
+            }, step=self.step)
+            
+            self.samples_logged += 1
+            self.step += 1
+            
+        except Exception as e:
+            print(f"Error creating detailed sample: {e}")
+    
+    def log_epoch_summary(self, epoch, train_loss, val_metrics, epoch_time):
+        """Log epoch summary"""
+        wandb.log({
+            "epoch": epoch + 1,
+            "summary/train_loss": train_loss,
+            "summary/val_l1": val_metrics["l1"],
+            "summary/val_psnr": val_metrics.get("psnr", 0.0),
+            "summary/val_ssim": val_metrics.get("ssim", 0.0),
+            "summary/epoch_time": epoch_time,
+            "summary/samples_logged_total": self.samples_logged
+        }, step=self.step)
+        self.step += 1
+    
+    def log_best_model(self, epoch, val_l1, model_path):
+        """Log when best model is saved"""
+        wandb.log({
+            "best_model/epoch": epoch + 1,
+            "best_model/val_l1": val_l1,
+            "best_model/saved": True
+        }, step=self.step)
+        self.step += 1
+
+
 def find_brats_cases(data_dir, target_modality="T1CE"):
     """Find BraTS cases and set up for synthesis"""
     cases = []
@@ -163,201 +301,73 @@ def find_brats_cases(data_dir, target_modality="T1CE"):
     return cases
 
 
-def log_synthesis_samples(inputs, targets, predictions, case_names, epoch=None, batch_idx=None, target_modality="T1CE"):
-    """FIXED: Log synthesis samples to W&B with proper slider functionality"""
-    try:
-        num_samples = len(inputs)
-        images = []
-        
-        for i in range(num_samples):
-            slice_idx = inputs[i].shape[-1] // 2
-            # Stack input modalities horizontally (channels 0,1,2)
-            input_imgs = [inputs[i][ch, :, :, slice_idx] for ch in range(3)]
-            input_stack = np.concatenate(input_imgs, axis=1)
-            # Target and prediction
-            target_img = targets[i][0, :, :, slice_idx]
-            pred_img = predictions[i][0, :, :, slice_idx]
-            # Stack all together: [inputs | target | prediction]
-            all_stack = np.concatenate([input_stack, target_img, pred_img], axis=1)
-            # Normalize to 0-255 for wandb.Image
-            img_norm = (all_stack - all_stack.min()) / (all_stack.ptp() + 1e-8)
-            img_uint8 = (img_norm * 255).astype(np.uint8)
-            # Add color dimension for wandb.Image (grayscale)
-            img_uint8 = np.stack([img_uint8]*3, axis=-1)
-            
-            # CRITICAL: Include epoch info in caption since slider can't show custom x-axis
-            caption = f"EPOCH {epoch + 1 if epoch is not None else 'N/A'} | Case: {case_names[i]} | Batch: {batch_idx if batch_idx is not None else 'N/A'}"
-            images.append(wandb.Image(img_uint8, caption=caption))
-        
-        # FIXED: Use consistent key name for slider functionality
-        title = f"synthesis_slider_{target_modality.lower()}"
-        
-        # CRITICAL FIX: No step parameter - let WandB auto-increment naturally
-        log_data = {
-            f"synthesis/{title}": images,
-        }
-        
-        # Add context information for reference (but not for slider control)
-        if epoch is not None:
-            log_data["synthesis/current_epoch"] = epoch + 1
-        if batch_idx is not None:
-            log_data["synthesis/current_batch"] = batch_idx
-            
-        # Log without step parameter to use WandB's natural progression
-        wandb.log(log_data)
-        
-    except Exception as e:
-        print(f"Error logging synthesis samples: {e}")
-
-
-def log_synthesis_table(inputs, targets, predictions, case_names, epoch, target_modality):
-    """Alternative: Use WandB Table for better synthesis tracking and comparison"""
-    try:
-        # Create comprehensive table for this epoch
-        table = wandb.Table(columns=[
-            "epoch", "case_id", "input_mods", "target", "prediction", "side_by_side"
-        ])
-        
-        for i in range(len(inputs)):
-            slice_idx = inputs[i].shape[-1] // 2
-            
-            # Create input modalities stack
-            input_imgs = [inputs[i][ch, :, :, slice_idx] for ch in range(3)]
-            input_stack = np.concatenate(input_imgs, axis=1)
-            
-            # Individual images
-            target_img = targets[i][0, :, :, slice_idx]
-            pred_img = predictions[i][0, :, :, slice_idx]
-            
-            # Side-by-side comparison
-            comparison = np.concatenate([input_stack, target_img, pred_img], axis=1)
-            
-            # Normalize for display
-            def normalize_for_display(img):
-                img_norm = (img - img.min()) / (img.ptp() + 1e-8)
-                img_uint8 = (img_norm * 255).astype(np.uint8)
-                return np.stack([img_uint8]*3, axis=-1) if len(img_uint8.shape) == 2 else img_uint8
-            
-            table.add_data(
-                epoch + 1,
-                case_names[i],
-                wandb.Image(normalize_for_display(input_stack), caption=f"Input modalities"),
-                wandb.Image(normalize_for_display(target_img), caption=f"Target {target_modality}"),
-                wandb.Image(normalize_for_display(pred_img), caption=f"Predicted {target_modality}"),
-                wandb.Image(normalize_for_display(comparison), caption=f"Input | Target | Prediction")
-            )
-        
-        # Log table - creates searchable, filterable results
-        wandb.log({f"synthesis_table_{target_modality.lower()}": table})
-        
-    except Exception as e:
-        print(f"Error logging synthesis table: {e}")
-
-
-def train_epoch(model, loader, optimizer, epoch, loss_func, max_epochs, target_modality):
-    """FIXED: Training epoch with proper logging frequency"""
+def frequent_sample_train_epoch(model, loader, optimizer, epoch, loss_func, max_epochs, target_modality, logger):
+    """Training with frequent sample logging"""
     model.train()
-    start_time = time.time()
     run_loss = AverageMeter()
     run_dice = AverageMeter()
-    
-    # Track image logging to avoid conflicts
-    images_logged_this_epoch = False
     
     for idx, batch_data in enumerate(loader):
         input_data = batch_data["input_image"].cuda()
         target_data = batch_data["target_image"].cuda()
         
         optimizer.zero_grad()
-        
-        # Forward pass
         predicted = model(input_data)
-        
-        # Compute loss
         total_loss, loss_components = loss_func(predicted, target_data)
-        
-        # Backward pass
         total_loss.backward()
         optimizer.step()
         
         # Update metrics
         run_loss.update(total_loss.item(), n=input_data.shape[0])
         run_dice.update(loss_components["dice"], n=input_data.shape[0])
-
-        print(
-            f"Epoch {epoch + 1}/{max_epochs} Batch {idx + 1}/{len(loader)}",
-            f"loss: {run_loss.avg:.4f}",
-            f"dice: {run_dice.avg:.4f}",
-            f"time: {time.time() - start_time:.2f}s"
+        
+        # Log training metrics
+        logger.log_training_metrics(
+            epoch, idx, len(loader), 
+            total_loss.item(), loss_components, 
+            optimizer.param_groups[0]['lr']
         )
-
-        # FIXED: Log batch metrics less frequently to avoid step conflicts
-        if (idx + 1) % 100 == 0:  # Reduced frequency
-            wandb.log({
-                "train/batch_loss": total_loss.item(),
-                "train/batch_loss_avg": run_loss.avg,
-                "train/batch_dice": loss_components["dice"],
-                "train/current_epoch": epoch + 1,
-                "train/current_batch": idx + 1,
-            })
-
-        # FIXED: Log synthesis sample only ONCE per epoch to maintain clean slider
-        if (idx + 1) % 300 == 0 and not images_logged_this_epoch:
-            log_batch_synthesis(model, input_data, target_data, batch_data, epoch, idx, target_modality)
-            images_logged_this_epoch = True
-
-        start_time = time.time()
+        
+        # LOG SAMPLES FREQUENTLY - every 15 batches in early epochs, less frequent later
+        if epoch < 5:
+            sample_freq = 15  # Very frequent early on
+        elif epoch < 20:
+            sample_freq = 30  # Medium frequency
+        else:
+            sample_freq = 50  # Less frequent later
+            
+        if (idx + 1) % sample_freq == 0:
+            print(f"📸 Logging training sample at epoch {epoch+1}, batch {idx+1}")
+            logger.log_training_samples(model, input_data, target_data, batch_data, epoch, idx)
+        
+        # Progress print
+        if (idx + 1) % 20 == 0:
+            print(f"Epoch {epoch+1}/{max_epochs} [{idx+1}/{len(loader)}] "
+                  f"Loss: {run_loss.avg:.4f} Dice: {run_dice.avg:.4f}")
     
     return run_loss.avg
 
 
-def log_batch_synthesis(model, input_data, target_data, batch_data, epoch, batch_idx, target_modality):
-    """FIXED: Log a quick synthesis sample during training"""
-    try:
-        model.eval()
-        with torch.no_grad():
-            # Get prediction for first sample in batch
-            predicted = model(input_data[:1])
-            
-            # Log single sample
-            case_name = f"batch_sample_{batch_idx}"
-            log_synthesis_samples(
-                [input_data[0].cpu().numpy()], 
-                [target_data[0].cpu().numpy()], 
-                [predicted[0].cpu().numpy()], 
-                [case_name], 
-                epoch,
-                batch_idx,
-                target_modality
-            )
-        model.train()
-    except Exception as e:
-        print(f"Error logging batch synthesis sample: {e}")
-
-
-def val_epoch(model, loader, epoch, max_epochs, target_modality):
-    """Validation epoch for synthesis"""
+def frequent_sample_val_epoch(model, loader, epoch, max_epochs, target_modality, logger):
+    """Validation with frequent sample logging"""
     model.eval()
-    start_time = time.time()
-    
-    # Initialize metrics
-    l1_loss = nn.L1Loss()
-    
+    run_l1 = AverageMeter()
     run_psnr = AverageMeter()
     run_ssim = AverageMeter()
-    run_l1 = AverageMeter()
-
+    
+    # Collect samples for logging
+    sample_inputs, sample_targets, sample_preds, sample_names = [], [], [], []
+    
     with torch.no_grad():
         for idx, batch_data in enumerate(loader):
             try:
                 input_data = batch_data["input_image"].cuda()
                 target_data = batch_data["target_image"].cuda()
-                
-                # Forward pass
                 predicted = model(input_data)
                 
                 # Compute metrics
-                l1_val = l1_loss(predicted, target_data).item()
+                l1_loss = torch.nn.functional.l1_loss(predicted, target_data)
+                run_l1.update(l1_loss.item(), n=input_data.shape[0])
                 
                 # PSNR and SSIM (handle potential errors)
                 try:
@@ -365,72 +375,37 @@ def val_epoch(model, loader, epoch, max_epochs, target_modality):
                     ssim_metric = SSIMMetric(spatial_dims=3)
                     psnr_val = psnr_metric(predicted, target_data).item()
                     ssim_val = ssim_metric(predicted, target_data).item()
+                    run_psnr.update(psnr_val, n=input_data.shape[0])
+                    run_ssim.update(ssim_val, n=input_data.shape[0])
                 except:
-                    psnr_val = 0.0
-                    ssim_val = 0.0
+                    pass  # Skip if metrics fail
                 
-                run_l1.update(l1_val, n=input_data.shape[0])
-                run_psnr.update(psnr_val, n=input_data.shape[0])
-                run_ssim.update(ssim_val, n=input_data.shape[0])
+                # Collect samples (more samples for better coverage)
+                if len(sample_inputs) < 8:  # Increased from 3 to 8
+                    sample_inputs.append(input_data[0].cpu().numpy())
+                    sample_targets.append(target_data[0].cpu().numpy())
+                    sample_preds.append(predicted[0].cpu().numpy())
+                    sample_names.append(batch_data.get("case_id", [f"val_case_{idx}"])[0])
                 
-                print(
-                    f"Val Epoch {epoch + 1}/{max_epochs} Batch {idx + 1}/{len(loader)}",
-                    f"L1: {run_l1.avg:.6f}",
-                    f"PSNR: {run_psnr.avg:.6f}",
-                    f"SSIM: {run_ssim.avg:.6f}",
-                    f"time: {time.time() - start_time:.2f}s"
-                )
-                start_time = time.time()
-                
+                if (idx + 1) % 10 == 0:
+                    print(f"Val [{idx+1}/{len(loader)}] L1: {run_l1.avg:.6f}")
+                    
             except Exception as e:
                 print(f"Error in validation step {idx}: {e}")
                 continue
-
+    
+    # Log validation samples EVERY epoch (not just every 5)
+    print(f"📸 Logging {len(sample_inputs)} validation samples for epoch {epoch+1}")
+    logger.log_validation_samples(
+        sample_inputs, sample_targets, sample_preds, sample_names, epoch, "val"
+    )
+    
     return {"l1": run_l1.avg, "psnr": run_psnr.avg, "ssim": run_ssim.avg}
-
-
-def log_validation_samples(model, loader, epoch, target_modality, num_samples=3, use_table=False):
-    """FIXED: Log synthesis samples during validation"""
-    model.eval()
-    
-    inputs, targets, predictions, case_names = [], [], [], []
-    
-    with torch.no_grad():
-        for idx, batch_data in enumerate(loader):
-            if len(inputs) >= num_samples:
-                break
-                
-            try:
-                input_data = batch_data["input_image"].cuda()
-                target_data = batch_data["target_image"].cuda()
-                case_id = batch_data.get("case_id", [f"case_{idx}"])[0]
-                
-                # Get prediction
-                predicted = model(input_data)
-                
-                # Collect data
-                inputs.append(input_data[0].cpu().numpy())
-                targets.append(target_data[0].cpu().numpy())
-                predictions.append(predicted[0].cpu().numpy())
-                case_names.append(case_id)
-                
-            except Exception as e:
-                print(f"Error processing validation sample {idx}: {e}")
-                continue
-    
-    # Log samples using both approaches for comparison
-    if inputs:
-        # Standard slider approach
-        log_synthesis_samples(inputs, targets, predictions, case_names, epoch, target_modality=target_modality)
-        
-        # Table approach for better organization (optional)
-        if use_table:
-            log_synthesis_table(inputs, targets, predictions, case_names, epoch, target_modality)
 
 
 def parse_args():
     """Parse command line arguments"""
-    parser = argparse.ArgumentParser(description='BraTS Modality Synthesis')
+    parser = argparse.ArgumentParser(description='BraTS Modality Synthesis with Frequent Sample Logging')
     parser.add_argument('--pretrained_path', type=str, required=True,
                         help='Path to pretrained segmentation model')
     parser.add_argument('--save_path', type=str, required=True,
@@ -455,11 +430,11 @@ def main():
         os.makedirs(save_dir, exist_ok=True)
         print(f"Created save directory: {save_dir}")
     
-    # Initialize W&B
+    # Initialize W&B with frequent sample configuration
     roi = (128, 128, 128)
     wandb.init(
-        project="BraTS-Synthesis-Fixed", 
-        name=f"synthesis_{args.target_modality.lower()}_fixed_slider",
+        project="BraTS-Synthesis-FrequentSamples",
+        name=f"synthesis_{args.target_modality.lower()}_all_inputs_frequent",
         config={
             "target_modality": args.target_modality,
             "max_epochs": args.max_epochs,
@@ -473,13 +448,14 @@ def main():
             "scheduler": "CosineAnnealingLR",
             "loss": "Dice",
             "use_tables": args.use_tables,
-            "wandb_fix": "removed_custom_step_metrics_for_media"
+            "logging_strategy": "frequent_samples_all_inputs",
+            "sample_frequency": "every_15_batches_early_epochs",
+            "validation_samples": "every_epoch_8_samples",
+            "input_modalities_shown": "all_3_plus_target_and_prediction"
         }
     )
     
-    # IMPORTANT: Do NOT use define_metric for media sliders - it doesn't work
-    # Media sliders in WandB always use internal step counter, not custom metrics
-    print("✓ WandB initialized without custom step metrics (media sliders don't support them)")
+    print("✓ WandB initialized for frequent sample logging with all input modalities")
     
     # Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -487,7 +463,6 @@ def main():
     print(f"Target modality: {args.target_modality}")
     print(f"Pretrained model: {args.pretrained_path}")
     print(f"Model will be saved to: {args.save_path}")
-    print(f"Using tables: {args.use_tables}")
     
     # Find synthesis data
     print("Looking for BraTS data...")
@@ -525,21 +500,9 @@ def main():
     })
     
     # Transforms for synthesis
-    def debug_shape(data):
-        # Print shapes for debugging
-        input_img = data["input_image"]
-        target_img = data["target_image"]
-        if isinstance(input_img, list):
-            print("input_image is a list, shapes:", [np.array(i).shape for i in input_img])
-        else:
-            print("input_image shape:", np.array(input_img).shape)
-        print("target_image shape:", np.array(target_img).shape)
-        return data
-
     train_transform = transforms.Compose([
         transforms.LoadImaged(keys=["input_image", "target_image"]),
         transforms.EnsureChannelFirstd(keys=["target_image"]),
-        debug_shape,  # Debug print after loading
         transforms.NormalizeIntensityd(keys=["input_image", "target_image"], nonzero=True, channel_wise=True),
         transforms.CropForegroundd(
             keys=["input_image", "target_image"],
@@ -586,73 +549,55 @@ def main():
     loss_func = DiceSynthesisLoss()
     
     # Training setup
-    optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5, weight_decay=1e-5)  # Lower LR for transfer
+    optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.max_epochs, eta_min=1e-6)
+    
+    # Initialize frequent sample logger
+    logger = FrequentSampleLogger(args.target_modality)
     
     print(f"\n=== SYNTHESIS TRAINING CONFIGURATION ===")
     print(f"Max epochs: {args.max_epochs}")
     print(f"Learning rate: 5e-5 (reduced for transfer learning)")
     print(f"Loss: Dice")
     print(f"ROI size: {roi}")
-    print(f"WandB Fix: Using natural step progression for media sliders")
+    print(f"🎯 FREQUENT SAMPLE LOGGING ENABLED")
+    print(f"📸 Training samples: Every 15 batches (early epochs) → 50 batches (later)")
+    print(f"📸 Validation samples: Every epoch, up to 8 samples")
+    print(f"🔍 Showing ALL input modalities: {logger.input_modalities}")
     
     best_l1 = float('inf')
     
     for epoch in range(args.max_epochs):
-        # Optionally log gradients and parameter histograms every epoch
-        if epoch % 10 == 0:  # Less frequent to avoid clutter
-            wandb.watch(model, log="all", log_freq=50)
-            
         print(f"\n=== EPOCH {epoch+1}/{args.max_epochs} ===")
-        epoch_time = time.time()
+        epoch_start = time.time()
 
-        # Training
-        train_loss = train_epoch(
-            model=model,
-            loader=train_loader,
-            optimizer=optimizer,
-            epoch=epoch,
-            loss_func=loss_func,
-            max_epochs=args.max_epochs,
-            target_modality=args.target_modality
+        # Training with frequent samples
+        train_loss = frequent_sample_train_epoch(
+            model, train_loader, optimizer, epoch, 
+            loss_func, args.max_epochs, args.target_modality, logger
         )
 
-        print(f"EPOCH {epoch + 1} COMPLETE, avg_loss: {train_loss:.4f}, time: {time.time() - epoch_time:.2f}s")
+        print(f"EPOCH {epoch + 1} COMPLETE, avg_loss: {train_loss:.4f}, time: {time.time() - epoch_start:.2f}s")
 
-        # Validation
+        # Validation with samples every epoch
         epoch_time = time.time()
-        val_metrics = val_epoch(
-            model=model,
-            loader=val_loader,
-            epoch=epoch,
-            max_epochs=args.max_epochs,
-            target_modality=args.target_modality
+        val_metrics = frequent_sample_val_epoch(
+            model, val_loader, epoch, args.max_epochs, args.target_modality, logger
         )
 
-        # FIXED: Log epoch metrics without step parameter
-        wandb.log({
-            "val/epoch": epoch + 1,
-            "train/loss": train_loss,
-            "val/l1": val_metrics["l1"],
-            "val/psnr": val_metrics["psnr"],
-            "val/ssim": val_metrics["ssim"],
-            "train/learning_rate": optimizer.param_groups[0]['lr'],
-            "val/time": time.time() - epoch_time
-        })
+        epoch_time = time.time() - epoch_time
+        
+        # Log epoch summary
+        logger.log_epoch_summary(epoch, train_loss, val_metrics, epoch_time)
 
         print(f"VALIDATION COMPLETE: L1: {val_metrics['l1']:.6f}, PSNR: {val_metrics['psnr']:.6f}, SSIM: {val_metrics['ssim']:.6f}")
-
-        # Log synthesis samples every 5 epochs (and at epoch 0) 
-        if (epoch + 1) % 5 == 0 or epoch == 0:
-            print("Logging synthesis samples...")
-            log_validation_samples(model, val_loader, epoch, args.target_modality, 
-                                 num_samples=3, use_table=args.use_tables)
 
         # Save best model
         if val_metrics["l1"] < best_l1:
             print(f"NEW BEST L1 SCORE! ({best_l1:.6f} --> {val_metrics['l1']:.6f})")
             best_l1 = val_metrics["l1"]
-            wandb.log({"val/best_l1": best_l1})
+            
+            logger.log_best_model(epoch, best_l1, args.save_path)
 
             try:
                 torch.save({
@@ -670,18 +615,21 @@ def main():
                 print(f"ERROR saving model: {e}")
 
         scheduler.step()
+        print(f"Epoch {epoch+1} complete in {epoch_time:.1f}s | Samples logged: {logger.samples_logged}")
     
-    print(f"\n✓ SYNTHESIS TRAINING COMPLETED!")
-    print(f"✓ Best L1 score: {best_l1:.6f}")
+    print(f"\n🎉 TRAINING COMPLETE!")
+    print(f"📊 Total samples logged: {logger.samples_logged}")
+    print(f"🏆 Best L1: {best_l1:.6f}")
     print(f"✓ Target modality: {args.target_modality}")
     print(f"✓ Best model saved to: {args.save_path}")
-    print(f"✓ WandB slider should now work properly with natural step progression")
+    print(f"🔍 All input modalities were visible in samples")
     
     # Log summary to W&B
     wandb.run.summary["best_l1"] = best_l1
     wandb.run.summary["target_modality"] = args.target_modality
     wandb.run.summary["best_model_path"] = args.save_path
-    wandb.run.summary["wandb_fix_applied"] = "natural_step_progression_for_media"
+    wandb.run.summary["total_samples_logged"] = logger.samples_logged
+    wandb.run.summary["logging_strategy"] = "frequent_samples_all_inputs"
     wandb.finish()
 
 

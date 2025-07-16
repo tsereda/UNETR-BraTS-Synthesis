@@ -535,7 +535,7 @@ def main():
         wandb.watch(model, log="all", log_freq=20)
         print(f"\n=== EPOCH {epoch+1}/{args.max_epochs} ===")
         epoch_time = time.time()
-        
+
         # Training
         train_loss = train_epoch(
             model=model,
@@ -546,9 +546,9 @@ def main():
             max_epochs=args.max_epochs,
             target_modality=args.target_modality
         )
-        
+
         print(f"EPOCH {epoch + 1} COMPLETE, avg_loss: {train_loss:.4f}, time: {time.time() - epoch_time:.2f}s")
-        
+
         # Validation
         epoch_time = time.time()
         val_metrics = val_epoch(
@@ -558,7 +558,7 @@ def main():
             max_epochs=args.max_epochs,
             target_modality=args.target_modality
         )
-        
+
         # Log metrics to W&B
         wandb.log({
             "epoch": epoch + 1,
@@ -569,20 +569,20 @@ def main():
             "learning_rate": optimizer.param_groups[0]['lr'],
             "val_time": time.time() - epoch_time
         })
-        
+
         print(f"VALIDATION COMPLETE: L1: {val_metrics['l1']:.6f}, PSNR: {val_metrics['psnr']:.6f}, SSIM: {val_metrics['ssim']:.6f}")
-        
-        # Log synthesis samples
-        if (epoch + 1) % 5 == 0 or epoch == 0:
+
+        # Log synthesis samples every 10 epochs (and at epoch 0)
+        if (epoch + 1) % 10 == 0 or epoch == 0:
             print("Logging synthesis samples...")
             log_validation_samples(model, val_loader, epoch, args.target_modality, num_samples=3)
-        
+
         # Save best model
         if val_metrics["l1"] < best_l1:
             print(f"NEW BEST L1 SCORE! ({best_l1:.6f} --> {val_metrics['l1']:.6f})")
             best_l1 = val_metrics["l1"]
             wandb.log({"best_val_l1": best_l1})
-            
+
             try:
                 torch.save({
                     'epoch': epoch + 1,
@@ -597,7 +597,7 @@ def main():
                 print(f"✓ Best synthesis model saved to: {args.save_path}")
             except Exception as e:
                 print(f"ERROR saving model: {e}")
-                
+
         scheduler.step()
     
     print(f"\n✓ SYNTHESIS TRAINING COMPLETED!")

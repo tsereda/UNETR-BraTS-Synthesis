@@ -203,10 +203,10 @@ def run_inference(model, loader, model_inferer, post_sigmoid, post_pred, output_
                 # Use first input image path as reference for affine transformation
                 reference_path = None
                 if "image" in batch_data:
-                    # batch_data["image"] is a list of 4 file paths
+                    # batch_data["image"] is a list of file paths (strings)
                     if isinstance(batch_data["image"][0], str):
                         reference_path = batch_data["image"][0]
-                    elif isinstance(batch_data["image"][0], list) and isinstance(batch_data["image"][0][0], str):
+                    elif isinstance(batch_data["image"][0], (list, tuple)) and isinstance(batch_data["image"][0][0], str):
                         reference_path = batch_data["image"][0][0]
                 if reference_path is None:
                     print(f"Error processing case {idx}: Cannot determine reference_path for NIfTI saving.")

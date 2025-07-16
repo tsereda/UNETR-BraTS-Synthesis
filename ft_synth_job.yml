@@ -45,7 +45,7 @@ spec:
             - name: WANDB_PROJECT
               value: "UNETR-BraTS-SegFinetuneToSynth"
             - name: WANDB_ENTITY
-              value: "timgsereda"
+              value: "BraTS2025"
             - name: WANDB_MODE
               value: "online"
             - name: SYNAPSE_AUTHTOKEN

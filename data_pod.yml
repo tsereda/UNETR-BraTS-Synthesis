@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: data-pod-brats
+  labels:
+    app: data-pod-brats
+spec:
+  nodeSelector:
+    topology.kubernetes.io/region: us-west
+  
+  containers:
+    - name: brats-processing
+      image: gitlab-registry.nrp-nautilus.io/prp/jupyter-stack/prp
+      
+      env:
+        - name: REPO_PATH
+          value: /app/UNETR-BraTS-Synthesis
+        - name: PYTHONPATH
+          value: /app/UNETR-BraTS-Synthesis
+        - name: CUDA_VISIBLE_DEVICES
+          value: "0,1"
+
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: PYTHONIOENCODING
+          value: "UTF-8"
+      
+      command: ["/bin/bash", "-c"]
+      args:
+        - |
+
+
+
+          tail -f /dev/null
+      
+      volumeMounts:
+        - name: workspace
+          mountPath: /app
+        - name: data
+          mountPath: /data1
+        - name: data
+          mountPath: /data2
+        - name: data
+          mountPath: /data3
+        - name: data
+          mountPath: /data4
+        - name: shm
+          mountPath: /dev/shm
+      
+  
+  volumes:
+    - name: workspace
+      emptyDir:
+        sizeLimit: 50Gi
+    - name: data1
+      persistentVolumeClaim:
+        claimName: brats2025-1
+    - name: data2
+      persistentVolumeClaim:
+        claimName: brats2025-2
+    - name: data3
+      persistentVolumeClaim:
+        claimName: brats2025-3
+    - name: data4
+      persistentVolumeClaim:
+        claimName: brats2025-4
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Gi
+  
+  restartPolicy: Never

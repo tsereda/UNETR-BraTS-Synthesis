@@ -337,7 +337,7 @@ def frequent_sample_train_epoch(model, loader, optimizer, epoch, loss_func, max_
             sample_freq = 50  # Less frequent later
             
         if (idx + 1) % sample_freq == 0:
-            print(f"📸 Logging training sample at epoch {epoch+1}, batch {idx+1}")
+            print(f"Logging training sample at epoch {epoch+1}, batch {idx+1}")
             logger.log_training_samples(model, input_data, target_data, batch_data, epoch, idx)
         
         # Progress print
@@ -395,7 +395,7 @@ def frequent_sample_val_epoch(model, loader, epoch, max_epochs, target_modality,
                 continue
     
     # Log validation samples EVERY epoch (not just every 5)
-    print(f"📸 Logging {len(sample_inputs)} validation samples for epoch {epoch+1}")
+    print(f"Logging {len(sample_inputs)} validation samples for epoch {epoch+1}")
     logger.log_validation_samples(
         sample_inputs, sample_targets, sample_preds, sample_names, epoch, "val"
     )

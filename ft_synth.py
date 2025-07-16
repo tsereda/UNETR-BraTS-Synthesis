@@ -434,7 +434,7 @@ def main():
     roi = (128, 128, 128)
     wandb.init(
         project="BraTS2025",
-        name=f"synthesis_{args.target_modality.lower()}_all_inputs_frequent",
+        name=f"synthesis_{args.target_modality.lower()}",
         config={
             "target_modality": args.target_modality,
             "max_epochs": args.max_epochs,

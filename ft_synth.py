@@ -417,6 +417,7 @@ def main():
         print(f"Created save directory: {save_dir}")
     
     # Initialize W&B
+    roi = (128, 128, 128)
     wandb.init(
         project="BraTS-Synthesis", 
         name=f"synthesis_{args.target_modality.lower()}_transfer_learning",
@@ -478,7 +479,6 @@ def main():
     })
     
     # Transforms for synthesis
-    roi = (128, 128, 128)
     
     def debug_shape(data):
         # Print shapes for debugging

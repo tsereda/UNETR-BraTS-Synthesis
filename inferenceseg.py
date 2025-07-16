@@ -200,19 +200,17 @@ def run_inference(model, loader, model_inferer, post_sigmoid, post_pred, output_
                 case_output_dir = os.path.join(output_dir, case_id)
                 os.makedirs(case_output_dir, exist_ok=True)
                 
-                # Use first input image as reference for affine transformation
-                if "image_meta_dict" in batch_data:
-                    reference_path = batch_data["image_meta_dict"]["filename_or_obj"][0][0]
-                else:
-                    # Fallback: use the path from the dataset dictionary
-                    # batch_data["image"] is a list of file paths or arrays; get the first string path
-                    first_image = batch_data["image"][0]
-                    if isinstance(first_image, str):
-                        reference_path = first_image
-                    elif isinstance(first_image, (list, tuple)) and isinstance(first_image[0], str):
-                        reference_path = first_image[0]
-                    else:
-                        raise RuntimeError("Cannot determine reference_path for NIfTI saving.")
+                # Use first input image path as reference for affine transformation
+                reference_path = None
+                if "image" in batch_data:
+                    # batch_data["image"] is a list of 4 file paths
+                    if isinstance(batch_data["image"][0], str):
+                        reference_path = batch_data["image"][0]
+                    elif isinstance(batch_data["image"][0], list) and isinstance(batch_data["image"][0][0], str):
+                        reference_path = batch_data["image"][0][0]
+                if reference_path is None:
+                    print(f"Error processing case {idx}: Cannot determine reference_path for NIfTI saving.")
+                    continue
                 pred_path = os.path.join(case_output_dir, f"{case_id}_pred.nii.gz")
                 save_nifti_prediction(prediction, reference_path, pred_path)
                 

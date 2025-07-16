@@ -158,7 +158,12 @@ spec:
               python fix_cuda.py
               
               # Run with enhanced error handling
-              python ft_synth.py --pretrained_path best_model_batchsize4_epoch100_128.pt --save_path .
+              python ft_synth.py --pretrained_path best_model_batchsize4_epoch100_128.pt --save_path /data/ --max_epochs 1 --target_modality FLAIR
+              python ft_synth.py --pretrained_path best_model_batchsize4_epoch100_128.pt --save_path /data/ --max_epochs 1 --target_modality T1CE
+              python ft_synth.py --pretrained_path best_model_batchsize4_epoch100_128.pt --save_path /data/ --max_epochs 1 --target_modality T1
+              python ft_synth.py --pretrained_path best_model_batchsize4_epoch100_128.pt --save_path /data/ --max_epochs 1 --target_modality T2
+
+              ls -la /data/
 
               # Run inference
               # python inferenceseg.py \

@@ -1,14 +1,18 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: fets-pod
+  name: fets-pod-fresh1
+  namespace: gai-lina-group
 spec:
+  imagePullSecrets:
+  - name: gitlab-registry-secret
   containers:
   - name: fets-container
-    image: gitlab-registry.nrp-nautilus.io/timothy.sereda/brats2025:1.0.2
+    image: ghcr.io/fets-ai/front-end:1.0.2
     command: ["/bin/bash"]
     args: 
       - -c
       - |
-
+        apt-get update && apt-get install -y git
+        echo "Container started successfully!"
         tail -f /dev/null

@@ -165,39 +165,35 @@ def find_brats_cases(data_dir, target_modality="T1CE"):
 def log_synthesis_samples(inputs, targets, predictions, case_names, epoch=None, batch_idx=None, target_modality="T1CE"):
     """Log synthesis samples to W&B (show all three input modalities, no diff image)"""
     try:
+        import cv2
         num_samples = len(inputs)
-        fig, axes = plt.subplots(num_samples, 5, figsize=(20, 4 * num_samples))
-
-        # Handle single sample case
-        if num_samples == 1:
-            axes = axes.reshape(1, -1)
-
+        images = []
+        captions = []
         for i in range(num_samples):
             slice_idx = inputs[i].shape[-1] // 2
-            # Show all three input modalities (channels 0,1,2)
-            for ch in range(3):
-                axes[i, ch].imshow(inputs[i][ch, :, :, slice_idx], cmap='gray')
-                axes[i, ch].set_title(f'Input Modality {ch+1}')
-                axes[i, ch].axis('off')
-            # Target modality
-            axes[i, 3].imshow(targets[i][0, :, :, slice_idx], cmap='gray')
-            axes[i, 3].set_title(f'Target ({target_modality})')
-            axes[i, 3].axis('off')
-            # Predicted modality
-            axes[i, 4].imshow(predictions[i][0, :, :, slice_idx], cmap='gray')
-            axes[i, 4].set_title(f'Predicted ({target_modality})')
-            axes[i, 4].axis('off')
-
-        plt.tight_layout()
-
-        title = f"synthesis_samples_{target_modality.lower()}"
+            # Stack input modalities horizontally (channels 0,1,2)
+            input_imgs = [inputs[i][ch, :, :, slice_idx] for ch in range(3)]
+            input_stack = np.concatenate(input_imgs, axis=1)
+            # Target and prediction
+            target_img = targets[i][0, :, :, slice_idx]
+            pred_img = predictions[i][0, :, :, slice_idx]
+            # Stack all together: [inputs | target | prediction]
+            all_stack = np.concatenate([input_stack, target_img, pred_img], axis=1)
+            # Normalize to 0-255 for wandb.Image
+            img_norm = (all_stack - all_stack.min()) / (all_stack.ptp() + 1e-8)
+            img_uint8 = (img_norm * 255).astype(np.uint8)
+            # Add color dimension for wandb.Image (grayscale)
+            img_uint8 = np.stack([img_uint8]*3, axis=-1)
+            caption = f"Case: {case_names[i]} | Epoch: {epoch if epoch is not None else ''} | Batch: {batch_idx if batch_idx is not None else ''}"
+            images.append(wandb.Image(img_uint8, caption=caption))
+            captions.append(caption)
+        # Log as a list for slider compatibility
+        title = f"synthesis_slider_{target_modality.lower()}"
         if epoch is not None:
             title += f"_epoch_{epoch}"
         if batch_idx is not None:
             title += f"_batch_{batch_idx}"
-
-        wandb.log({f"synthesis/{title}": wandb.Image(fig)})
-        plt.close(fig)
+        wandb.log({f"synthesis/{title}": images})
     except Exception as e:
         print(f"Error logging synthesis samples: {e}")
 
@@ -249,7 +245,7 @@ def train_epoch(model, loader, optimizer, epoch, loss_func, max_epochs, target_m
             })
 
             # Log sample synthesis every 100 batches
-            if (idx + 1) % 100 == 0:
+            if (idx + 1) % 20 == 0:
                 log_batch_synthesis(model, input_data, target_data, batch_data, epoch, idx, target_modality)
 
         start_time = time.time()
@@ -533,7 +529,7 @@ def main():
     
     for epoch in range(args.max_epochs):
         # Optionally log gradients and parameter histograms every epoch
-        wandb.watch(model, log="all", log_freq=100)
+        wandb.watch(model, log="all", log_freq=20)
         print(f"\n=== EPOCH {epoch+1}/{args.max_epochs} ===")
         epoch_time = time.time()
         

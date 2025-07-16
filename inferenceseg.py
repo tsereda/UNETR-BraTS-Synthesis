@@ -200,13 +200,17 @@ def run_inference(model, loader, model_inferer, post_sigmoid, post_pred, output_
                 case_output_dir = os.path.join(output_dir, case_id)
                 os.makedirs(case_output_dir, exist_ok=True)
                 
-                # Use first input image path as reference for affine transformation
+                # Use parent folder of first input image as reference for affine/header
                 print(f"Batch keys: {list(batch_data.keys())}")  # Debug: see available keys
                 reference_path = None
-                if "image_meta_dict" in batch_data and "filename_or_obj" in batch_data["image_meta_dict"]:
-                    reference_path = batch_data["image_meta_dict"]["filename_or_obj"][0][0]
-                elif "image" in batch_data and isinstance(batch_data["image"][0], str):
-                    reference_path = batch_data["image"][0]
+                if "image" in batch_data and isinstance(batch_data["image"][0], str):
+                    parent_folder = os.path.dirname(batch_data["image"][0])
+                    nii_files = sorted([f for f in os.listdir(parent_folder) if f.endswith(".nii.gz")])
+                    if nii_files:
+                        reference_path = os.path.join(parent_folder, nii_files[0])
+                    else:
+                        print(f"Error: No .nii.gz files found in {parent_folder}")
+                        continue
                 else:
                     print(f"Error processing case {idx}: Cannot determine reference_path for NIfTI saving.")
                     continue

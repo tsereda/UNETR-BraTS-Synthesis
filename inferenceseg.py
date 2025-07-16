@@ -201,9 +201,12 @@ def run_inference(model, loader, model_inferer, post_sigmoid, post_pred, output_
                 os.makedirs(case_output_dir, exist_ok=True)
                 
                 # Use first input image path as reference for affine transformation
+                print(f"Batch keys: {list(batch_data.keys())}")  # Debug: see available keys
                 reference_path = None
                 if "image_meta_dict" in batch_data and "filename_or_obj" in batch_data["image_meta_dict"]:
                     reference_path = batch_data["image_meta_dict"]["filename_or_obj"][0][0]
+                elif "image" in batch_data and isinstance(batch_data["image"][0], str):
+                    reference_path = batch_data["image"][0]
                 else:
                     print(f"Error processing case {idx}: Cannot determine reference_path for NIfTI saving.")
                     continue

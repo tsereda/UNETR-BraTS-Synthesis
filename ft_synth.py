@@ -207,8 +207,7 @@ def train_epoch(model, loader, optimizer, epoch, loss_func, max_epochs, target_m
     model.train()
     start_time = time.time()
     run_loss = AverageMeter()
-    run_l1 = AverageMeter()
-    run_mse = AverageMeter()
+    run_dice = AverageMeter()
     batch_log_freq = 50
     
     for idx, batch_data in enumerate(loader):
@@ -229,33 +228,30 @@ def train_epoch(model, loader, optimizer, epoch, loss_func, max_epochs, target_m
         
         # Update metrics
         run_loss.update(total_loss.item(), n=input_data.shape[0])
-        run_l1.update(loss_components["l1"], n=input_data.shape[0])
-        run_mse.update(loss_components["mse"], n=input_data.shape[0])
-        
+        run_dice.update(loss_components["dice"], n=input_data.shape[0])
+
         print(
             f"Epoch {epoch + 1}/{max_epochs} Batch {idx + 1}/{len(loader)}",
             f"loss: {run_loss.avg:.4f}",
-            f"l1: {run_l1.avg:.4f}",
-            f"mse: {run_mse.avg:.4f}",
+            f"dice: {run_dice.avg:.4f}",
             f"time: {time.time() - start_time:.2f}s"
         )
-        
+
         # Log to W&B every batch_log_freq batches
         if (idx + 1) % batch_log_freq == 0:
             wandb.log({
                 "batch_step": epoch * len(loader) + idx,
                 "batch_loss": total_loss.item(),
                 "batch_loss_avg": run_loss.avg,
-                "batch_l1": loss_components["l1"],
-                "batch_mse": loss_components["mse"],
+                "batch_dice": loss_components["dice"],
                 "epoch": epoch + 1,
                 "batch": idx + 1
             })
-            
+
             # Log sample synthesis every 100 batches
             if (idx + 1) % 100 == 0:
                 log_batch_synthesis(model, input_data, target_data, batch_data, epoch, idx, target_modality)
-        
+
         start_time = time.time()
     
     return run_loss.avg

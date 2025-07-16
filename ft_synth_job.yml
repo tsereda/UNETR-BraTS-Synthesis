@@ -22,6 +22,7 @@ spec:
               value: /app/UNETR-BraTS-Synthesis
             - name: PYTHONPATH
               value: /app/UNETR-BraTS-Synthesis
+            # FIX: Set to single GPU since we're only requesting 1
             - name: CUDA_VISIBLE_DEVICES
               value: "0"
             # nnUNet paths
@@ -55,6 +56,11 @@ spec:
           command: ["/bin/bash", "-c"]
           args:
             - |
+              # Add GPU debugging at the start
+              echo "=== GPU DEBUG INFO ==="
+              nvidia-smi || echo "nvidia-smi not available"
+              echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
+              
               # pip install synapseclient
               # synapse config
               # synapse get -r syn51514105 
@@ -92,14 +98,66 @@ spec:
               
               python -c "import wandb; print(f'W&B version: {wandb.__version__}')"
               
-              # python scripts/test_wandb.py
-              
-              python -c "import torch; print(f'GPUs available: {torch.cuda.device_count()}')"
+              # Enhanced GPU availability check
+              python -c "
+              import torch
+              print(f'PyTorch version: {torch.__version__}')
+              print(f'CUDA available: {torch.cuda.is_available()}')
+              print(f'CUDA version: {torch.version.cuda}')
+              print(f'GPUs available: {torch.cuda.device_count()}')
+              if torch.cuda.is_available():
+                  for i in range(torch.cuda.device_count()):
+                      print(f'GPU {i}: {torch.cuda.get_device_name(i)}')
+              "
               
               pip install "numpy<2.0" torch nibabel matplotlib monai[all]
 
               cp /data/segresults/best_model_batchsize4_epoch100_128.pt .
 
+              # Create a patch for the CUDA issue
+              cat > fix_cuda.py << 'EOF'
+              import sys
+              
+              # Read the original file
+              with open('ft_synth.py', 'r') as f:
+                  content = f.read()
+              
+              # Apply fixes
+              fixes = [
+                  # Fix device detection
+                  ('    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")', 
+                   '''    # Enhanced device detection and setup
+                   if not torch.cuda.is_available():
+                       print('WARNING: CUDA not available, using CPU')
+                       device = torch.device('cpu')
+                   else:
+                       print(f'CUDA available: {torch.cuda.device_count()} GPUs')
+                       for i in range(torch.cuda.device_count()):
+                           print(f'GPU {i}: {torch.cuda.get_device_name(i)}')
+                       device = torch.device('cuda')
+                   print(f'Using device: {device}')'''),
+                  
+                  # Replace .cuda() calls with .to(device)
+                  ('.cuda()', '.to(device)'),
+                  
+                  # Fix input_data and target_data cuda calls in training functions
+                  ('input_data = batch_data["input_image"].cuda()', 'input_data = batch_data["input_image"].to(device)'),
+                  ('target_data = batch_data["target_image"].cuda()', 'target_data = batch_data["target_image"].to(device)'),
+              ]
+              
+              for old, new in fixes:
+                  content = content.replace(old, new)
+              
+              # Write the fixed file
+              with open('ft_synth_fixed.py', 'w') as f:
+                  f.write(content)
+              
+              print("✓ Created ft_synth_fixed.py with CUDA fixes")
+              EOF
+              
+              python fix_cuda.py
+              
+              # Run with enhanced error handling
               python ft_synth.py --pretrained_path best_model_batchsize4_epoch100_128.pt --save_path .
 
               # Run inference

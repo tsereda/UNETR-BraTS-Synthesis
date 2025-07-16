@@ -7,6 +7,7 @@ metadata:
 spec:
   nodeSelector:
     topology.kubernetes.io/region: us-west
+    nautilus.io/linstor: "true"
   
   containers:
     - name: brats-processing
@@ -17,9 +18,6 @@ spec:
           value: /app/UNETR-BraTS-Synthesis
         - name: PYTHONPATH
           value: /app/UNETR-BraTS-Synthesis
-        - name: CUDA_VISIBLE_DEVICES
-          value: "0,1"
-
         - name: PYTHONUNBUFFERED
           value: "1"
         - name: PYTHONIOENCODING
@@ -36,14 +34,14 @@ spec:
       volumeMounts:
         - name: workspace
           mountPath: /app
-        - name: data1
-          mountPath: /data1
         - name: data2
           mountPath: /data2
         - name: data3
           mountPath: /data3
         - name: data4
           mountPath: /data4
+        - name: data5
+          mountPath: /data5
         - name: shm
           mountPath: /dev/shm
       
@@ -52,9 +50,6 @@ spec:
     - name: workspace
       emptyDir:
         sizeLimit: 50Gi
-    - name: data1
-      persistentVolumeClaim:
-        claimName: brats2025-1
     - name: data2
       persistentVolumeClaim:
         claimName: brats2025-2
@@ -64,6 +59,9 @@ spec:
     - name: data4
       persistentVolumeClaim:
         claimName: brats2025-4
+    - name: data5
+      persistentVolumeClaim:
+        claimName: brats2025-5
     - name: shm
       emptyDir:
         medium: Memory

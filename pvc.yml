@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: brats2025-4
+  name: brats2025-5
 spec:
   accessModes:
     - ReadWriteOnce

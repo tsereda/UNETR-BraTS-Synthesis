@@ -6,7 +6,7 @@ metadata:
     app: eval-unetr-brats
 spec:
   nodeSelector:
-    topology.kubernetes.io/region: us-west
+    #topology.kubernetes.io/region: us-west
     nautilus.io/linstor: "true"
   affinity:
     nodeAffinity:

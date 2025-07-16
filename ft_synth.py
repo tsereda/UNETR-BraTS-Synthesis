@@ -433,7 +433,7 @@ def main():
     # Initialize W&B with frequent sample configuration
     roi = (128, 128, 128)
     wandb.init(
-        project="BraTS-Synthesis-FrequentSamples",
+        project="BraTS2025",
         name=f"synthesis_{args.target_modality.lower()}_all_inputs_frequent",
         config={
             "target_modality": args.target_modality,

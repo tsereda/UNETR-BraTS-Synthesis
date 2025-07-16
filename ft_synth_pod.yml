@@ -110,14 +110,13 @@ spec:
 
           cp /data/segresults/best_model_batchsize4_epoch100_128.pt .
 
+          python ft_synth.py --pretrained_path best_model_batchsize4_epoch100_128.pt --save_path .
+
           # Run inference
-          python inferenceseg.py \
-            --model_path best_model_batchsize4_epoch100_128.pt \
-            --subset 5 \
-            --output_dir .
-          
-          echo "✅ Files copied to /data/inference_output/"
-          echo "📊 Model performance: 87.3% dice - Ready for synthesis!"
+          # python inferenceseg.py \
+          #   --model_path best_model_batchsize4_epoch100_128.pt \
+          #   --subset 5 \
+          #   --output_dir .
 
           tail -f /dev/null
       

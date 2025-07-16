@@ -560,10 +560,10 @@ def main():
     print(f"Learning rate: 5e-5 (reduced for transfer learning)")
     print(f"Loss: Dice")
     print(f"ROI size: {roi}")
-    print(f"🎯 FREQUENT SAMPLE LOGGING ENABLED")
-    print(f"📸 Training samples: Every 15 batches (early epochs) → 50 batches (later)")
-    print(f"📸 Validation samples: Every epoch, up to 8 samples")
-    print(f"🔍 Showing ALL input modalities: {logger.input_modalities}")
+    print(f"FREQUENT SAMPLE LOGGING ENABLED")
+    print(f"Training samples: Every 15 batches (early epochs) → 50 batches (later)")
+    print(f"Validation samples: Every epoch, up to 8 samples")
+    print(f"Showing all input modalities: {logger.input_modalities}")
     
     best_l1 = float('inf')
     

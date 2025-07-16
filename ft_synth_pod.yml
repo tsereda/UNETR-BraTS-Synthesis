@@ -130,9 +130,9 @@ spec:
       
       resources:
         requests:
-          memory: 24Gi                # Increased for multi-GPU
-          cpu: "12"                   # Increased for multi-GPU
-          nvidia.com/gpu: "2"         # Request 2 GPUs (adjust as needed)
+          memory: 24Gi  
+          cpu: "12"              
+          nvidia.com/gpu: "2"
         limits:
           memory: 32Gi
           cpu: "16"

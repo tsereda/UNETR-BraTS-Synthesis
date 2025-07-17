@@ -48,6 +48,8 @@ spec:
           --output_dir pseudo_validation
           
         python dropout_modality.py --verify --output_dir pseudo_validation
+
+        pip install torch monai[all] nibabel
         
         tail -f /dev/null
     volumeMounts:

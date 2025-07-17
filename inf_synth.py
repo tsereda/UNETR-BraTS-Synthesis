@@ -28,15 +28,30 @@ class SynthesisModel(nn.Module):
     
     def __init__(self, output_channels=1):
         super().__init__()
-        self.backbone = SwinUNETR(
-            in_channels=4,  # 4 input channels as in training
-            out_channels=3,
-            feature_size=48,
-            drop_rate=0.0,
-            attn_drop_rate=0.0,
-            dropout_path_rate=0.0,
-            use_checkpoint=True,
-        )
+        # Handle MONAI version compatibility
+        try:
+            # Try with img_size (newer MONAI versions)
+            self.backbone = SwinUNETR(
+                img_size=(128, 128, 128),  # Match your training ROI size
+                in_channels=4,  # 4 input channels as in training
+                out_channels=3,
+                feature_size=48,
+                drop_rate=0.0,
+                attn_drop_rate=0.0,
+                dropout_path_rate=0.0,
+                use_checkpoint=True,
+            )
+        except TypeError:
+            # Fallback for older MONAI versions (like your training)
+            self.backbone = SwinUNETR(
+                in_channels=4,
+                out_channels=3,
+                feature_size=48,
+                drop_rate=0.0,
+                attn_drop_rate=0.0,
+                dropout_path_rate=0.0,
+                use_checkpoint=True,
+            )
         
         # Replace output head for synthesis
         in_channels = self.backbone.out.conv.in_channels

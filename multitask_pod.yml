@@ -103,7 +103,6 @@ spec:
           
           pip install "numpy<2.0" torch nibabel matplotlib monai[all]
 
-          cp /data/segresults/best_model_batchsize4_epoch100_128.pt .
 
           python multitask.py
 

@@ -2,6 +2,7 @@
 """
 BraTS Multi-task UNETR: Synthesis + Segmentation
 Train 4 models that simultaneously synthesize missing modality and perform segmentation
+Training from scratch without pretrained weights
 """
 
 import os
@@ -62,7 +63,7 @@ class AverageMeter(object):
 class MultiTaskSwinUNETR(nn.Module):
     """SwinUNETR for multi-task learning: synthesis + segmentation"""
     
-    def __init__(self, pretrained_seg_path=None):
+    def __init__(self):
         super().__init__()
         # Always 3 input channels (3 available modalities)
         # 4 output channels: 1 for synthesis + 3 for segmentation
@@ -76,37 +77,8 @@ class MultiTaskSwinUNETR(nn.Module):
             use_checkpoint=True,
         )
         
-        # Load pretrained segmentation weights if available
-        if pretrained_seg_path and os.path.exists(pretrained_seg_path):
-            print(f"Loading pretrained segmentation weights from: {pretrained_seg_path}")
-            checkpoint = torch.load(pretrained_seg_path, map_location='cpu', weights_only=False)
-            
-            # Adapt weights from 4-input to 3-input model
-            pretrained_dict = checkpoint['model_state_dict']
-            model_dict = self.backbone.state_dict()
-            
-            # Filter out input layer weights (will be randomly initialized)
-            adapted_dict = {}
-            for k, v in pretrained_dict.items():
-                if k in model_dict:
-                    if 'swinViT.patch_embed.proj.weight' in k:
-                        # Skip input layer weights due to channel mismatch
-                        print(f"Skipping {k} due to channel mismatch")
-                        continue
-                    elif 'out.conv.weight' in k or 'out.conv.bias' in k:
-                        # Skip output layer weights due to channel mismatch
-                        print(f"Skipping {k} due to output channel mismatch")
-                        continue
-                    else:
-                        adapted_dict[k] = v
-            
-            # Load adapted weights
-            model_dict.update(adapted_dict)
-            self.backbone.load_state_dict(model_dict, strict=False)
-            print(f"✓ Loaded adapted weights from epoch {checkpoint['epoch']}")
-            print(f"✓ Segmentation dice: {checkpoint.get('val_acc_max', 'N/A')}")
-        
-        print(f"✓ Multi-task model: 3 input → 4 output channels (1 synthesis + 3 segmentation)")
+        print(f"✓ Multi-task model initialized: 3 input → 4 output channels (1 synthesis + 3 segmentation)")
+        print(f"✓ Training from scratch without pretrained weights")
 
     def forward(self, x):
         return self.backbone(x)
@@ -584,7 +556,7 @@ def get_multitask_transforms(roi):
     return train_transform, val_transform
 
 
-def train_single_multitask_model(target_modality, pretrained_path, save_path, max_epochs=50):
+def train_single_multitask_model(target_modality, save_path, max_epochs=50):
     """Train a single multi-task model for one missing modality"""
     
     print(f"\n=== TRAINING MULTI-TASK MODEL FOR {target_modality} ===")
@@ -593,11 +565,10 @@ def train_single_multitask_model(target_modality, pretrained_path, save_path, ma
     roi = (128, 128, 128)
     wandb.init(
         project="BraTS2025-MultiTask",
-        name=f"multitask_{target_modality.lower()}_synth_seg",
+        name=f"multitask_{target_modality.lower()}_synth_seg_from_scratch",
         config={
             "target_modality": target_modality,
             "max_epochs": max_epochs,
-            "pretrained_path": pretrained_path,
             "save_path": save_path,
             "batch_size": 2,
             "roi": roi,
@@ -606,6 +577,7 @@ def train_single_multitask_model(target_modality, pretrained_path, save_path, ma
             "output_channels": 4,
             "synthesis_weight": 1.0,
             "segmentation_weight": 1.0,
+            "training_from_scratch": True,
         }
     )
     
@@ -641,8 +613,8 @@ def train_single_multitask_model(target_modality, pretrained_path, save_path, ma
     val_ds = Dataset(data=val_cases, transform=val_transform)
     val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=4, pin_memory=True)
     
-    # Create model
-    model = MultiTaskSwinUNETR(pretrained_seg_path=pretrained_path).cuda()
+    # Create model (no pretrained weights)
+    model = MultiTaskSwinUNETR().cuda()
     
     # Loss function
     loss_func = MultiTaskLoss(synthesis_weight=1.0, segmentation_weight=1.0)
@@ -656,6 +628,7 @@ def train_single_multitask_model(target_modality, pretrained_path, save_path, ma
     
     print(f"Training multi-task model: {target_modality}")
     print(f"Input: 3 modalities, Output: 1 synthesis + 3 segmentation")
+    print(f"Training from scratch without pretrained weights")
     
     best_combined_score = 0.0
     
@@ -703,6 +676,7 @@ def train_single_multitask_model(target_modality, pretrained_path, save_path, ma
                 'task': 'multitask_synthesis_segmentation',
                 'input_channels': 3,
                 'output_channels': 4,
+                'training_from_scratch': True,
             }, save_path)
             print(f"✓ Best model saved to: {save_path}")
         
@@ -719,12 +693,10 @@ def train_single_multitask_model(target_modality, pretrained_path, save_path, ma
 
 def parse_args():
     """Parse command line arguments"""
-    parser = argparse.ArgumentParser(description='Multi-task BraTS: Synthesis + Segmentation')
-    parser.add_argument('--pretrained_path', type=str, required=True,
-                        help='Path to pretrained segmentation model')
+    parser = argparse.ArgumentParser(description='Multi-task BraTS: Synthesis + Segmentation (Training from scratch)')
     parser.add_argument('--save_dir', type=str, default='/data/multitask_models',
                         help='Directory to save the 4 trained models')
-    parser.add_argument('--max_epochs', type=int, default=30,
+    parser.add_argument('--max_epochs', type=int, default=50,
                         help='Maximum number of training epochs per model')
     parser.add_argument('--target_modality', type=str, default='all',
                         choices=['FLAIR', 'T1CE', 'T1', 'T2', 'all'],
@@ -745,14 +717,14 @@ def main():
         modalities = [args.target_modality]
     
     print(f"🚀 MULTI-TASK TRAINING: Synthesis + Segmentation")
-    print(f"📊 Training {len(modalities)} model(s)")
+    print(f"📊 Training {len(modalities)} model(s) from scratch")
     print(f"💾 Models will be saved to: {args.save_dir}")
-    print(f"🔧 Pretrained weights: {args.pretrained_path}")
+    print(f"🔧 No pretrained weights - training from scratch")
     
     results = {}
     
     for modality in modalities:
-        save_path = os.path.join(args.save_dir, f"multitask_{modality.lower()}_best.pt")
+        save_path = os.path.join(args.save_dir, f"multitask_{modality.lower()}_from_scratch_best.pt")
         
         print(f"\n{'='*60}")
         print(f"🎯 STARTING {modality} MULTI-TASK TRAINING")
@@ -761,7 +733,6 @@ def main():
         try:
             score = train_single_multitask_model(
                 target_modality=modality,
-                pretrained_path=args.pretrained_path,
                 save_path=save_path,
                 max_epochs=args.max_epochs
             )
@@ -787,6 +758,7 @@ def main():
     print(f"  • Synthesizes missing modalities")
     print(f"  • Performs segmentation")
     print(f"  • Each model takes 3 modalities → outputs 1 synthesis + 3 segmentation channels")
+    print(f"  • All models trained from scratch without pretrained weights")
 
 
 if __name__ == "__main__":

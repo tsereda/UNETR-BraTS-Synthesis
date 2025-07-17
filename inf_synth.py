@@ -145,6 +145,10 @@ def prepare_input_data(case_dir, case_name, target_modality_suffix):
 def synthesize_modality(input_data, model, device):
     """Run synthesis inference"""
     
+    # Store original image shape for later cropping
+    original_img = nib.load(input_data["input_image"][0])
+    original_shape = original_img.shape
+    
     # Transforms (same as validation in training)
     transform = transforms.Compose([
         transforms.LoadImaged(keys=["input_image"]),
@@ -176,8 +180,24 @@ def synthesize_modality(input_data, model, device):
             cval=0.0,
         )
     
-    # Return as numpy array
+    # Get result as numpy array
     result = prediction[0, 0].cpu().numpy()  # Remove batch and channel dims
+    
+    # Crop back to original dimensions
+    if result.shape != original_shape:
+        print(f"    Cropping from {result.shape} to {original_shape}")
+        # Calculate crop indices
+        crop_slices = []
+        for i in range(3):
+            if result.shape[i] >= original_shape[i]:
+                start = (result.shape[i] - original_shape[i]) // 2
+                end = start + original_shape[i]
+                crop_slices.append(slice(start, end))
+            else:
+                crop_slices.append(slice(None))
+        
+        result = result[tuple(crop_slices)]
+    
     return result
 
 
@@ -228,6 +248,13 @@ def process_single_case(case_dir, output_dir, models_dir, device):
         if existing_files:
             reference_path = os.path.join(case_dir, existing_files[0])
             reference_img = nib.load(reference_path)
+            
+            # Ensure the synthesized data matches the reference shape exactly
+            if synthesized.shape != reference_img.shape:
+                print(f"    Warning: Shape mismatch - synthesized: {synthesized.shape}, reference: {reference_img.shape}")
+                # This should not happen with the fix above, but as a safety measure
+                synthesized = synthesized[:reference_img.shape[0], :reference_img.shape[1], :reference_img.shape[2]]
+            
             synthesized_img = nib.Nifti1Image(
                 synthesized, 
                 reference_img.affine, 
@@ -238,6 +265,23 @@ def process_single_case(case_dir, output_dir, models_dir, device):
         
         nib.save(synthesized_img, synthesized_path)
         print(f"  ✓ Saved: {synthesized_filename}")
+        
+        # Verify dimensional consistency
+        print(f"    Verifying dimensional consistency...")
+        all_files = [f for f in os.listdir(case_output_dir) if f.endswith('.nii.gz')]
+        shapes = {}
+        for filename in all_files:
+            img = nib.load(os.path.join(case_output_dir, filename))
+            shapes[filename] = img.shape
+        
+        # Check if all shapes are the same
+        unique_shapes = set(shapes.values())
+        if len(unique_shapes) == 1:
+            print(f"    ✅ All modalities have consistent shape: {list(unique_shapes)[0]}")
+        else:
+            print(f"    ⚠️  Shape inconsistency detected:")
+            for filename, shape in shapes.items():
+                print(f"      {filename}: {shape}")
         
         # Verify complete case
         expected_files = [f"{case_name}-{s}.nii.gz" for s in ['t2f', 't1c', 't1n', 't2w']]
@@ -336,8 +380,8 @@ def main():
     if successful > 0:
         print(f"\n🎯 Dataset ready for FeTS segmentation: {args.output_dir}")
         print(f"\nNext steps:")
-        print(f"1. Convert to FeTS format")
-        print(f"2. Run FeTS segmentation")
+        print(f"1. Convert to FeTS format: ./convert_to_fets_format.sh")
+        print(f"2. Run FeTS segmentation: ./squashfs-root/usr/bin/fets_cli_segment -d fets_formatted/ -a deepMedic -g 0 -t 0")
         print(f"3. Convert to BraSyn submission format")
 
 

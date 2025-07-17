@@ -360,7 +360,7 @@ def frequent_sample_val_epoch(model, loader, epoch, max_epochs, target_modality,
     sample_inputs, sample_targets, sample_preds, sample_names = [], [], [], []
     
     # ROI size for sliding window inference
-    roi = (128, 128, 128)
+    roi = (96, 96, 96)
     
     with torch.no_grad():
         for idx, batch_data in enumerate(loader):

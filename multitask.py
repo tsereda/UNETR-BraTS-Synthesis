@@ -533,7 +533,7 @@ def train_single_multitask_model(target_modality, save_path, max_epochs=50):
     print(f"\n=== TRAINING MULTI-TASK MODEL FOR {target_modality} ===")
     
     # Initialize W&B
-    roi = (128, 128, 128)
+    roi = (96, 96, 96)
     wandb.init(
         project="BraTS2025-MultiTask",
         name=f"multitask_{target_modality.lower()}_synth_seg",

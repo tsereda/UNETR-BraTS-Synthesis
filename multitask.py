@@ -527,7 +527,7 @@ def get_multitask_transforms(roi):
     return train_transform, val_transform
 
 
-def train_single_multitask_model(target_modality, save_path, max_epochs=50):
+def train_single_multitask_model(target_modality, save_path, max_epochs=50, batch_size=2):
     """Train a single multi-task model for one missing modality"""
     
     print(f"\n=== TRAINING MULTI-TASK MODEL FOR {target_modality} ===")
@@ -541,7 +541,7 @@ def train_single_multitask_model(target_modality, save_path, max_epochs=50):
             "target_modality": target_modality,
             "max_epochs": max_epochs,
             "save_path": save_path,
-            "batch_size": 2,
+            "batch_size": batch_size,
             "roi": roi,
             "task": "synthesis_and_segmentation",
             "input_channels": 3,
@@ -554,6 +554,7 @@ def train_single_multitask_model(target_modality, save_path, max_epochs=50):
     # Setup device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    print(f"Using batch size: {batch_size}")
     
     # Find data
     base_dir = "/app/UNETR-BraTS-Synthesis"
@@ -576,7 +577,6 @@ def train_single_multitask_model(target_modality, save_path, max_epochs=50):
     train_transform, val_transform = get_multitask_transforms(roi)
     
     # Data loaders
-    batch_size = 2
     train_ds = Dataset(data=train_cases, transform=train_transform)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=6, pin_memory=True)
     
@@ -669,6 +669,8 @@ def parse_args():
     parser.add_argument('--target_modality', type=str, default='all',
                         choices=['FLAIR', 'T1CE', 'T1', 'T2', 'all'],
                         help='Which modality to train (or all for all 4 models)')
+    parser.add_argument('--batch_size', type=int, default=2,
+                        help='Batch size for training (default: 2)')
     return parser.parse_args()
 
 
@@ -687,6 +689,8 @@ def main():
     print(f"🚀 MULTI-TASK TRAINING: Synthesis + Segmentation")
     print(f"📊 Training {len(modalities)} model(s)")
     print(f"💾 Models will be saved to: {args.save_dir}")
+    print(f"📦 Batch size: {args.batch_size}")
+    print(f"🔢 Max epochs: {args.max_epochs}")
     
     results = {}
     
@@ -701,7 +705,8 @@ def main():
             score = train_single_multitask_model(
                 target_modality=modality,
                 save_path=save_path,
-                max_epochs=args.max_epochs
+                max_epochs=args.max_epochs,
+                batch_size=args.batch_size
             )
             results[modality] = score
             print(f"✅ {modality} completed with score: {score:.6f}")

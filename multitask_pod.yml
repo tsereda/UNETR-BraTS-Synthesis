@@ -104,7 +104,7 @@ spec:
           pip install "numpy<2.0" torch nibabel matplotlib monai[all]
 
 
-          python multitask.py --batch_size 1 --epochs 1 --targed_modality all
+          python multitask.py --batch_size 1 --max_epoch 2 --target_modality all
 
           # Run inference
           # python inferenceseg.py \

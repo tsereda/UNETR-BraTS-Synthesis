@@ -14,7 +14,48 @@ spec:
       - -c
       - |
         apt-get update && apt-get install -y git
-        echo "Container started successfully!"
-        
 
-        tail -f /dev/null
+        git clone https://github.com/tsereda/UNETR-BraTS-Synthesis.git ${REPO_PATH}
+        cd ${REPO_PATH}
+
+        sudo apt-get update && sudo apt-get install -y p7zip-full wget git
+              
+              for dataset in "TrainingData" "ValidationData"; do
+                zip_file="/data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset}.zip"
+                if [ -f "$zip_file" ]; then
+                  echo "Extracting ${dataset}..."
+                  cd /data
+                  # Extract directly to /data with proper directory structure
+                  sudo 7z x "$zip_file" -o"/data/"
+                  # Fix ownership
+                  if [ -d "/data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset}" ]; then
+                    sudo chown -R jovyan:jovyan "/data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset}"
+                    echo "Successfully extracted and set ownership for ${dataset}"
+                  else
+                    echo "Warning: Expected directory /data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset} not found after extraction"
+                    echo "Contents of /data after extraction:"
+                    ls -la /data/
+                  fi
+                  cd ${REPO_PATH}
+                  ln -sf "/data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset}" .
+                else
+                  echo "Zip file not found: $zip_file"
+                fi
+              done
+        
+        python scripts/dropout_modality.py \
+          --input_dir ASNR-MICCAI-BraTS2023-GLI-Challenge-ValidationData \
+          --output_dir pseudo_validation
+
+        # Verify existing set  
+        python scripts/dropout_modality.py --verify --output_dir pseudo_validation
+
+          tail -f /dev/null
+
+    volumeMounts:
+      - name: data
+        mountPath: /data
+    volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: brats2025-2

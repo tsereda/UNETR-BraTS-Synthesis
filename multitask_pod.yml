@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: ft-unetr-brats
+  name: multitask-brats
   labels:
-    app: ft-unetr-brats
+    app: multitask-brats
 spec:
   nodeSelector:
     #topology.kubernetes.io/region: us-west

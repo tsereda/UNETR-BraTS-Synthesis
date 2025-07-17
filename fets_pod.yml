@@ -4,6 +4,8 @@ metadata:
   name: fets-pod
   namespace: gai-lina-group
 spec:
+  nodeSelector:
+    nautilus.io/linstor: "true"
   imagePullSecrets:
   - name: gitlab-registry-secret
   containers:

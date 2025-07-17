@@ -18,13 +18,15 @@ spec:
     args:
       - -c
       - |
-        apt-get update && apt-get install -y git
+        apt-get update
+        mv /workspace/FeTS_0.0.9/squashfs-root/usr/lib/liblzma.so.5 /workspace/FeTS_0.0.9/squashfs-root/usr/lib/liblzma.so.5.bak
+        apt-get install -y git sudo
         
         git clone https://github.com/tsereda/UNETR-BraTS-Synthesis.git ${REPO_PATH}
         cd ${REPO_PATH}
         
-        sudo apt-get update && sudo apt-get install -y p7zip-full wget git
-        pip install nibabel numpy torch monai[all]
+        apt-get install -y p7zip-full wget
+        #pip install nibabel numpy
         
         for dataset in "TrainingData" "ValidationData"; do
           zip_file="/data/ASNR-MICCAI-BraTS2023-GLI-Challenge-${dataset}.zip"
@@ -41,11 +43,11 @@ spec:
           fi
         done
         
-        python scripts/dropout_modality.py \
+        python dropout_modality.py \
           --input_dir ASNR-MICCAI-BraTS2023-GLI-Challenge-ValidationData \
           --output_dir pseudo_validation
           
-        python scripts/dropout_modality.py --verify --output_dir pseudo_validation
+        python ropout_modality.py --verify --output_dir pseudo_validation
         
         tail -f /dev/null
     volumeMounts:

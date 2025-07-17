@@ -58,6 +58,8 @@ spec:
           command: ["/bin/bash", "-c"]
           args:
             - |
+              sudo mkdir /data/multitask_models/
+              sudo chmod 777 /data/multitask_models/
               git clone https://github.com/tsereda/UNETR-BraTS-Synthesis.git ${REPO_PATH}
               cd ${REPO_PATH}
               

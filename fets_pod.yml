@@ -2,10 +2,27 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: fets-pod
-  namespace: gai-lina-group
+  labels:
+    app: fets-brats
 spec:
   nodeSelector:
     nautilus.io/linstor: "true"
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: nvidia.com/gpu.product
+            operator: In
+            values:
+            - NVIDIA-A10
+            - NVIDIA-GeForce-RTX-3090
+            - NVIDIA-L40
+            - NVIDIA-A40
+  tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: PreferNoSchedule
   imagePullSecrets:
   - name: gitlab-registry-secret
   containers:
@@ -14,6 +31,8 @@ spec:
     env:
       - name: REPO_PATH
         value: /app/UNETR-BraTS-Synthesis
+      - name: CUDA_VISIBLE_DEVICES
+        value: "0"
     command: ["/bin/bash"]
     args:
       - -c
@@ -50,12 +69,33 @@ spec:
         python dropout_modality.py --verify --output_dir pseudo_validation
 
         pip install torch monai[all] nibabel
+
+        # Start with a small test (first 5 cases)
+        python synthesis_inference.py \
+            --input_dir pseudo_validation \
+            --output_dir completed_cases \ 
+            --models_dir /data \
+            --max_cases 5
+
+        # If that works, run on all cases
+        python synthesis_inference.py \
+            --input_dir pseudo_validation \
+            --output_dir completed_cases \
+            --models_dir /data
         
         tail -f /dev/null
     volumeMounts:
       - name: data
         mountPath: /data
-  
+    resources:
+      requests:
+        memory: 24Gi      
+        cpu: "12"     
+        nvidia.com/gpu: "1" 
+      limits:
+        memory: 32Gi
+        cpu: "16"
+        nvidia.com/gpu: "1"
   volumes:
     - name: data
       persistentVolumeClaim:

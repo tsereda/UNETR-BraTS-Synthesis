@@ -111,7 +111,7 @@ def load_synthesis_model(target_modality, models_dir, device):
     
     # Create and load model
     model = SynthesisModel(output_channels=1).to(device)
-    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+    checkpoint = torch.load(model_path, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
     

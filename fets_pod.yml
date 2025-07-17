@@ -70,18 +70,11 @@ spec:
 
         pip install torch monai[all] nibabel
 
-        # Start with a small test (first 5 cases)
-        python synthesis_inference.py \
-            --input_dir pseudo_validation \
-            --output_dir completed_cases \ 
-            --models_dir /data \
-            --max_cases 5
+        python inf_synth.py
 
-        # If that works, run on all cases
-        python synthesis_inference.py \
-            --input_dir pseudo_validation \
-            --output_dir completed_cases \
-            --models_dir /data
+        /workspace/FeTS_0.0.9/FeTS/0.0.9/FeTS-0.0.9.bin --appimage-extract
+
+        ./squashfs-root/usr/bin/fets_cli_segment -d completed_cases/ -a fets_singlet,fets_triplet -lF STAPLE,ITKVoting,SIMPLE,MajorityVoting -g 1 -t 0
         
         tail -f /dev/null
     volumeMounts:

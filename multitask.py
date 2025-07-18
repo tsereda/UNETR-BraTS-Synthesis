@@ -298,18 +298,18 @@ def find_multitask_cases(data_dir, target_modality="T1CE"):
         "T2": "t2w.nii.gz"
     }
 
-    # Use glob for more robust searching and handle nested structures like BraTS2023_00000/BraTS2023_00000
-    for subject_dir in glob.glob(os.path.join(data_dir, 'BraTS*/*BraTS*')):
+    # Use glob for the flat structure: each subject is a direct subdirectory
+    for subject_dir in glob.glob(os.path.join(data_dir, 'BraTS*')):
         item = os.path.basename(subject_dir) # Get the actual case ID from the directory name
-        
+
         # Build file paths
         files = {}
         for modality, suffix in modality_files.items():
             files[modality] = os.path.join(subject_dir, f"{item}-{suffix}")
-        
+
         # Add segmentation file
         seg_file = os.path.join(subject_dir, f"{item}-seg.nii.gz")
-        
+
         # Check if all files exist
         all_files_exist = True
         for f in list(files.values()) + [seg_file]:
@@ -317,12 +317,12 @@ def find_multitask_cases(data_dir, target_modality="T1CE"):
                 # print(f"Missing file: {f}") # For debugging
                 all_files_exist = False
                 break
-        
+
         if all_files_exist:
             # Get input modalities (exclude target)
             input_modalities = [mod for mod in modality_files.keys() if mod != target_modality]
             input_images = [files[mod] for mod in input_modalities]
-            
+
             case_data = {
                 "input_image": input_images,  # 3 input modalities
                 "target_synthesis": files[target_modality],  # Missing modality
@@ -331,7 +331,7 @@ def find_multitask_cases(data_dir, target_modality="T1CE"):
                 "target_modality": target_modality
             }
             cases.append(case_data)
-            
+
             if len(cases) % 50 == 0:
                 print(f"Found {len(cases)} valid cases so far...")
     

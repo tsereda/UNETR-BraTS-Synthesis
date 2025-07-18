@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-IMPROVED Synthesis Inference for BraSyn Pipeline
-Fixes the small file size issue from over-aggressive intensity scaling
-"""
-
 import os
 import argparse
 import numpy as np
@@ -16,6 +10,8 @@ from monai.inferers import sliding_window_inference
 from monai import transforms
 from monai.networks.nets import SwinUNETR
 import warnings
+from scipy import ndimage
+from skimage.filters import threshold_otsu
 
 warnings.filterwarnings("ignore")
 
@@ -171,7 +167,7 @@ def analyze_reference_modalities(reference_files, target_modality):
         ref_intensities = np.array(ref_intensities)
         
         # Use more conservative percentiles to avoid extreme values
-        target_min = max(np.percentile(ref_intensities, 5), 50)   # At least 50
+        target_min = max(np.percentile(ref_intensities, 5), 50)  # At least 50
         target_max = min(np.percentile(ref_intensities, 95), 5000)  # At most 5000
         
         # Ensure reasonable range
@@ -200,10 +196,7 @@ def analyze_reference_modalities(reference_files, target_modality):
 
 def create_brain_mask(reference_files, target_shape):
     """Create brain mask from reference modalities using Otsu thresholding"""
-    import numpy as np
-    from scipy import ndimage
-    from skimage.filters import threshold_otsu
-
+    
     combined_mask = np.zeros(target_shape, dtype=bool)
 
     for ref_file in reference_files:
@@ -372,7 +365,7 @@ def synthesize_modality_enhanced(input_data, model, device, reference_files, tar
     result_scaled[brain_mask > 0] = (result_enhanced[brain_mask > 0] * intensity_range + target_min)
 
     # Ensure minimum intensity for brain tissue
-    brain_tissue_mask = result_scaled > 0
+    brain_tissue_mask = result_scaled > 0 # This ensures we don't apply floor to background
     if np.sum(brain_tissue_mask) > 0:
         min_brain_intensity = target_min + intensity_range * 0.1
         result_scaled[brain_tissue_mask] = np.maximum(
@@ -412,6 +405,7 @@ def synthesize_modality_enhanced(input_data, model, device, reference_files, tar
     updated_header.set_data_dtype(result_final.dtype)
 
     return result_final, updated_header, original_affine
+
 
 def synthesize_modality(input_data, model, device, reference_files, target_modality):
     """Run synthesis inference with improved intensity scaling"""
@@ -565,17 +559,17 @@ def process_single_case(case_dir, output_dir, models_dir, device):
         missing_modality, missing_suffix = detect_missing_modality(case_dir)
         
         if missing_modality is None:
-            print(f"  No missing modality detected - skipping")
+            print(f"    No missing modality detected - skipping")
             return False
         
-        print(f"  Missing modality: {missing_modality} ({missing_suffix})")
+        print(f"    Missing modality: {missing_modality} ({missing_suffix})")
         
         # Create case output directory
         case_output_dir = os.path.join(output_dir, case_name)
         os.makedirs(case_output_dir, exist_ok=True)
         
         # Copy existing modalities first and collect reference files
-        print(f"  Copying existing modalities...")
+        print(f"    Copying existing modalities...")
         reference_files = []
         for filename in os.listdir(case_dir):
             if filename.endswith('.nii.gz'):
@@ -590,9 +584,9 @@ def process_single_case(case_dir, output_dir, models_dir, device):
         # Prepare input data
         input_data = prepare_input_data(case_dir, case_name, missing_suffix)
         
-        # Synthesize missing modality
-        print(f"  Synthesizing {missing_modality}...")
-        synthesized, updated_header, original_affine = synthesize_modality(
+        # Synthesize missing modality using the ENHANCED function
+        print(f"    Synthesizing {missing_modality}...")
+        synthesized, updated_header, original_affine = synthesize_modality_enhanced(
             input_data, model, device, reference_files, missing_modality
         )
         
@@ -609,22 +603,22 @@ def process_single_case(case_dir, output_dir, models_dir, device):
         
         # Save with compression
         nib.save(synthesized_img, synthesized_path)
-        print(f"  ✓ Saved: {synthesized_filename}")
+        print(f"    ✓ Saved: {synthesized_filename}")
         
         # Verify file size and consistency
         file_size = os.path.getsize(synthesized_path) / (1024 * 1024)  # MB
-        print(f"    File size: {file_size:.1f} MB")
+        print(f"      File size: {file_size:.1f} MB")
         
         # File size check
         if file_size < 1.0:
-            print(f"    ⚠️  Warning: File size is very small ({file_size:.1f} MB)")
-        elif file_size > 10.0:
-            print(f"    ⚠️  Warning: File size is large ({file_size:.1f} MB)")
+            print(f"      ⚠️  Warning: File size is very small ({file_size:.1f} MB)")
+        elif file_size > 8.0: # Adjusted upper threshold slightly
+            print(f"      ⚠️  Warning: File size is large ({file_size:.1f} MB)")
         else:
-            print(f"    ✅ File size is reasonable")
+            print(f"      ✅ File size is reasonable")
         
         # Verify dimensional consistency
-        print(f"    Verifying consistency...")
+        print(f"      Verifying consistency...")
         all_files = [f for f in os.listdir(case_output_dir) if f.endswith('.nii.gz')]
         
         # Check shapes, dtypes, and file sizes
@@ -652,17 +646,17 @@ def process_single_case(case_dir, output_dir, models_dir, device):
         size_reasonable = all(1.0 <= info['size_mb'] <= 8.0 for info in file_info.values())
         
         if shape_consistent:
-            print(f"    ✅ Shape consistent: {reference_shape}")
+            print(f"      ✅ Shape consistent: {reference_shape}")
         else:
-            print(f"    ⚠️  Shape inconsistency detected")
+            print(f"      ⚠️  Shape inconsistency detected")
             
         if size_reasonable:
-            print(f"    ✅ All file sizes reasonable (1-8MB)")
+            print(f"      ✅ All file sizes reasonable (1-8MB)")
         else:
-            print(f"    ⚠️  Some file sizes outside normal range")
+            print(f"      ⚠️  Some file sizes outside normal range")
         
         # Print summary
-        print(f"    File summary:")
+        print(f"      File summary:")
         for filename, info in file_info.items():
             if info['size_mb'] < 1.0:
                 status = "⚠️  (small)"
@@ -670,12 +664,12 @@ def process_single_case(case_dir, output_dir, models_dir, device):
                 status = "⚠️  (large)" 
             else:
                 status = "✅"
-            print(f"      {filename}: {info['size_mb']:.1f}MB, {info['dtype']} {status}")
+            print(f"        {filename}: {info['size_mb']:.1f}MB, {info['dtype']} {status}")
         
         return True
         
     except Exception as e:
-        print(f"  ❌ Error: {e}")
+        print(f"    ❌ Error: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -684,15 +678,15 @@ def process_single_case(case_dir, output_dir, models_dir, device):
 def main():
     parser = argparse.ArgumentParser(description="IMPROVED Synthesis Inference for BraSyn")
     parser.add_argument("--input_dir", type=str, default="pseudo_validation",
-                       help="Directory containing cases with missing modalities")
+                        help="Directory containing cases with missing modalities")
     parser.add_argument("--output_dir", type=str, default="completed_cases_fixed",
-                       help="Output directory for completed cases")
+                        help="Output directory for completed cases")
     parser.add_argument("--models_dir", type=str, default="/data",
-                       help="Directory containing synthesis models")
+                        help="Directory containing synthesis models")
     parser.add_argument("--device", type=str, default="cuda:0",
-                       help="Device for inference")
+                        help="Device for inference")
     parser.add_argument("--max_cases", type=int, default=None,
-                       help="Maximum number of cases to process")
+                        help="Maximum number of cases to process")
     
     args = parser.parse_args()
     
@@ -711,7 +705,7 @@ def main():
     if missing_models:
         print(f"❌ Missing required models:")
         for model in missing_models:
-            print(f"   {model}")
+            print(f"    {model}")
         print(f"Please ensure all synthesis models are in {args.models_dir}")
         return
     
@@ -722,7 +716,7 @@ def main():
     
     # Find all case directories
     case_dirs = [d for d in os.listdir(args.input_dir) 
-                if os.path.isdir(os.path.join(args.input_dir, d)) and 'BraTS' in d]
+                 if os.path.isdir(os.path.join(args.input_dir, d)) and 'BraTS' in d]
     case_dirs.sort()
     
     if args.max_cases:
@@ -735,11 +729,11 @@ def main():
     print(f"Output directory: {args.output_dir}")
     print(f"Found {len(case_dirs)} cases to process")
     print(f"✅ IMPROVEMENTS:")
-    print(f"  • Fixed small file issue (prevents <1MB files)")
-    print(f"  • Better negative value handling")
-    print(f"  • Improved intensity distribution")
-    print(f"  • Enhanced brain tissue preservation")
-    print(f"  • Target file size: 2-6MB per modality")
+    print(f"    • Fixed small file issue (prevents <1MB files)")
+    print(f"    • Better negative value handling")
+    print(f"    • Improved intensity distribution")
+    print(f"    • Enhanced brain tissue preservation")
+    print(f"    • Target file size: 2-8MB per modality (adjusted target)")
     
     # Process each case
     successful = 0
@@ -765,7 +759,7 @@ def main():
     
     if successful > 0:
         print(f"\n🎯 IMPROVED dataset ready: {args.output_dir}")
-        print(f"✅ Files should be consistently sized (2-6MB each)")
+        print(f"✅ Files should be consistently sized (2-8MB each)")
         print(f"\nNext: Run the fixed conversion script to prepare for FeTS")
 
 

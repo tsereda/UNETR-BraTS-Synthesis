@@ -146,12 +146,19 @@ class MultiTaskLoss(nn.Module):
                          0.5 * self.mse_loss(pred_synthesis, target_synthesis)
         
         # Segmentation loss
-        # Ensure target_segmentation is in correct format (squeeze channel dim if present)
-        if target_segmentation.dim() == 5 and target_segmentation.shape[1] == 1:
-            target_segmentation = target_segmentation.squeeze(1)
+        # DiceFocalLoss expects target to have channel dimension for non-one-hot targets
+        if target_segmentation.dim() == 4:
+            # Add channel dimension: [B, H, W, D] -> [B, 1, H, W, D]
+            target_segmentation = target_segmentation.unsqueeze(1)
+        elif target_segmentation.dim() == 5 and target_segmentation.shape[1] == 1:
+            # Already has correct shape
+            pass
+        elif target_segmentation.dim() == 5 and target_segmentation.shape[1] > 1:
+            # If it's already one-hot, convert to class indices
+            target_segmentation = torch.argmax(target_segmentation, dim=1, keepdim=True)
         
         dice_focal = self.dice_focal_loss(pred_segmentation, target_segmentation.long())
-        ce = self.ce_loss(pred_segmentation, target_segmentation.long())
+        ce = self.ce_loss(pred_segmentation, target_segmentation.squeeze(1).long())  # CE needs [B, H, W, D]
         segmentation_loss = dice_focal + ce
         
         # Combined loss

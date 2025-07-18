@@ -63,22 +63,36 @@ class MultiTaskSwinUNETR(nn.Module):
     """SwinUNETR for multi-task learning: synthesis + multi-class segmentation"""
     def __init__(self, num_segmentation_classes=4):
         super().__init__()
-        # 3 input channels (3 available modalities)
-        # 1 for synthesis + N for segmentation
         self.num_segmentation_classes = num_segmentation_classes
+        # Shared encoder-decoder backbone
         self.backbone = SwinUNETR(
             in_channels=3,
-            out_channels=1 + num_segmentation_classes,  # 1 synthesis + N segmentation
+            out_channels=64,  # Shared feature output
             feature_size=48,
             drop_rate=0.0,
             attn_drop_rate=0.0,
             dropout_path_rate=0.0,
             use_checkpoint=True,
         )
-        print(f"✓ Multi-task model initialized: 3 input → 1 synthesis + {num_segmentation_classes} segmentation channels")
+        # Task-specific heads
+        self.synth_head = nn.Sequential(
+            nn.Conv3d(64, 32, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(32, 1, kernel_size=1)
+        )
+        self.seg_head = nn.Sequential(
+            nn.Conv3d(64, 32, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(32, num_segmentation_classes, kernel_size=1)
+        )
+        print(f"✓ Multi-task model initialized: 3 input → 1 synthesis + {num_segmentation_classes} segmentation channels (with task-specific heads)")
 
     def forward(self, x):
-        return self.backbone(x)
+        features = self.backbone(x)
+        synth = self.synth_head(features)
+        seg = self.seg_head(features)
+        # Concatenate along channel dim: [B, 1+num_segmentation_classes, ...]
+        return torch.cat([synth, seg], dim=1)
 
 
 class MultiTaskLoss(nn.Module):
@@ -224,6 +238,7 @@ class MultiTaskLogger:
             # 0: background (black), 1: TC (red), 2: ED (green), 4: ET (blue)
             # Note: In seg.py, the visualization uses 1=TC (red), 2=ED (green), 4=ET (blue)
             # We'll use the same mapping for consistency
+            # BraTS: 0=background (black), 1=TC (red), 2=ED (green), 4=ET (blue)
             class_colors = np.zeros((5, 3), dtype=np.uint8)
             class_colors[0] = [0, 0, 0]       # 0: background - black
             class_colors[1] = [255, 0, 0]     # 1: TC - red
@@ -233,14 +248,8 @@ class MultiTaskLogger:
             def colorize_mask(mask):
                 mask = mask.astype(np.int32)
                 rgb = np.zeros((*mask.shape, 3), dtype=np.uint8)
+                # Only assign colors for valid classes (0,1,2,4)
                 for c in [0, 1, 2, 4]:
-                    rgb[mask == c] = class_colors[c]
-                return rgb
-
-            def colorize_mask(mask):
-                mask = mask.astype(np.int32)
-                rgb = np.zeros((*mask.shape, 3), dtype=np.uint8)
-                for c in range(class_colors.shape[0]):
                     rgb[mask == c] = class_colors[c]
                 return rgb
 

@@ -73,18 +73,23 @@ def load_and_normalize_image(file_path):
 
 
 def create_segmentation_overlay(seg_data):
-    """Create colored segmentation overlay"""
+    """Create colored segmentation overlay with distinct colors"""
     # Convert to RGB
     seg_colored = np.zeros((*seg_data.shape, 3), dtype=np.uint8)
     
-    # Background: black
+    # Background: black (only this should be black)
     seg_colored[seg_data == 0] = [0, 0, 0]
-    # Tumor Core (TC): red
+    # NCR/NET: bright red
     seg_colored[seg_data == 1] = [255, 0, 0]
-    # Whole Tumor (WT): green  
+    # Edema: bright green  
     seg_colored[seg_data == 2] = [0, 255, 0]
-    # Enhancing Tumor (ET): blue
-    seg_colored[seg_data == 4] = [0, 0, 255]
+    # Enhancing tumor: bright cyan (more visible than dark blue)
+    seg_colored[seg_data == 4] = [0, 255, 255]
+    
+    # Handle any unexpected labels (like 3) - make them yellow so we can see them
+    unexpected_labels = ~np.isin(seg_data, [0, 1, 2, 4])
+    if np.any(unexpected_labels):
+        seg_colored[unexpected_labels] = [255, 255, 0]  # Yellow for debugging
     
     return seg_colored
 
@@ -129,9 +134,7 @@ def visualize_case(case_data, slice_range=(70, 85)):
     
     # Find best slice with tumor content
     best_slice = find_best_slice(seg_data, slice_range)
-    unique_labels = np.unique(seg_data)
     print(f"  Best slice: {best_slice}")
-    print(f"  Labels present: {unique_labels}")
     
     # Extract slices
     flair_slice = flair_data[:, :, best_slice]
@@ -139,6 +142,12 @@ def visualize_case(case_data, slice_range=(70, 85)):
     t1_slice = t1_data[:, :, best_slice]
     t2_slice = t2_data[:, :, best_slice]
     seg_slice = seg_data[:, :, best_slice]
+    
+    # Debug: show what labels are present
+    unique_labels_slice = np.unique(seg_slice)
+    unique_labels_volume = np.unique(seg_data)
+    print(f"  Labels in this slice: {unique_labels_slice}")
+    print(f"  Labels in full volume: {unique_labels_volume}")
     
     # Create colored segmentation
     seg_colored = create_segmentation_overlay(seg_slice)
@@ -164,7 +173,7 @@ def visualize_case(case_data, slice_range=(70, 85)):
     axes[3].axis('off')
     
     axes[4].imshow(seg_colored)
-    axes[4].set_title('Segmentation', fontsize=14, fontweight='bold')
+    axes[4].set_title('Seg (1=Red, 2=Green, 4=Cyan)', fontsize=14, fontweight='bold')
     axes[4].axis('off')
     
     # Simple title

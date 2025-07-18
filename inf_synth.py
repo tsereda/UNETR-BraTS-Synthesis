@@ -385,7 +385,7 @@ def main():
     parser = argparse.ArgumentParser(description="FIXED Synthesis Inference for BraSyn")
     parser.add_argument("--input_dir", type=str, default="pseudo_validation",
                        help="Directory containing cases with missing modalities")
-    parser.add_argument("--output_dir", type=str, default="completed_cases_fixed",
+    parser.add_argument("--output_dir", type=str, default="completed_cases",
                        help="Output directory for completed cases")
     parser.add_argument("--models_dir", type=str, default="/data",
                        help="Directory containing synthesis models")

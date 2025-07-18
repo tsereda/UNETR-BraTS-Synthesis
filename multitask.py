@@ -96,8 +96,8 @@ class MultiTaskLoss(nn.Module):
         
         # Segmentation loss (DiceFocal for single channel)
         self.seg_loss = DiceFocalLoss(
-            to_onehot_y=False,
-            sigmoid=True,
+            to_onehot_y=False, # Output is already 1 channel, no need for one-hot conversion
+            sigmoid=True,      # Apply sigmoid to prediction before loss calculation
             gamma=2.0,
             lambda_dice=1.0,
             lambda_focal=1.0,
@@ -110,14 +110,15 @@ class MultiTaskLoss(nn.Module):
         
         # Synthesis loss
         synthesis_loss = self.l1_loss(pred_synthesis, target_synthesis) + \
-                        0.5 * self.mse_loss(pred_synthesis, target_synthesis)
+                         0.5 * self.mse_loss(pred_synthesis, target_synthesis)
         
         # Segmentation loss
-        segmentation_loss = self.seg_loss(pred_segmentation, target_segmentation)
+        # Ensure target_segmentation is float for loss calculation if it's coming in as long/int
+        segmentation_loss = self.seg_loss(pred_segmentation, target_segmentation.float())
         
         # Combined loss
         total_loss = (self.synthesis_weight * synthesis_loss + 
-                     self.segmentation_weight * segmentation_loss)
+                      self.segmentation_weight * segmentation_loss)
         
         return total_loss, {
             "total": total_loss.item(),
@@ -162,7 +163,10 @@ class MultiTaskLogger:
             with torch.no_grad():
                 predicted = model(input_data[:1])
                 pred_synth = predicted[:, 0:1, ...]
-                pred_seg = predicted[:, 1:2, ...]
+                
+                # Apply sigmoid and threshold for segmentation prediction visualization
+                pred_seg = torch.sigmoid(predicted[:, 1:2, ...])
+                pred_seg = (pred_seg > 0.5).float() # Binarize for visualization
                 
                 case_name = batch_data.get("case_id", [f"epoch{epoch+1}_batch{batch_idx}"])[0]
                 
@@ -180,10 +184,10 @@ class MultiTaskLogger:
             print(f"Error logging training sample: {e}")
     
     def log_validation_samples(self, inputs, targets_synth, targets_seg, 
-                             predictions_synth, predictions_seg, case_names, epoch):
+                               predictions_synth, predictions_seg, case_names, epoch):
         """Log validation samples"""
         try:
-            for i in range(min(5, len(inputs))):
+            for i in range(min(5, len(inputs))): # Log up to 5 samples
                 self._log_multitask_sample(
                     inputs[i], targets_synth[i], targets_seg[i],
                     predictions_synth[i], predictions_seg[i], case_names[i],
@@ -193,19 +197,29 @@ class MultiTaskLogger:
             print(f"Error logging validation samples: {e}")
     
     def _log_multitask_sample(self, input_vol, target_synth, target_seg, 
-                            pred_synth, pred_seg, case_name, stage_info):
+                               pred_synth, pred_seg, case_name, stage_info):
         """Log detailed multi-task sample"""
         try:
+            # Squeeze channel dimension if it exists and is 1
+            if input_vol.shape[0] == 1:
+                input_vol = input_vol[0] # remove channel if single channel
+            
+            # Ensure target_synth, pred_synth, target_seg, pred_seg are 3D
+            target_synth = np.squeeze(target_synth)
+            pred_synth = np.squeeze(pred_synth)
+            target_seg = np.squeeze(target_seg)
+            pred_seg = np.squeeze(pred_seg)
+
             slice_idx = input_vol.shape[-1] // 2
             
             # Extract slices
             input1_slice = input_vol[0, :, :, slice_idx]
             input2_slice = input_vol[1, :, :, slice_idx]
             input3_slice = input_vol[2, :, :, slice_idx]
-            target_synth_slice = target_synth[0, :, :, slice_idx]
-            pred_synth_slice = pred_synth[0, :, :, slice_idx]
-            target_seg_slice = target_seg[0, :, :, slice_idx]
-            pred_seg_slice = pred_seg[0, :, :, slice_idx]
+            target_synth_slice = target_synth[:, :, slice_idx]
+            pred_synth_slice = pred_synth[:, :, slice_idx]
+            target_seg_slice = target_seg[:, :, slice_idx]
+            pred_seg_slice = pred_seg[:, :, slice_idx]
             
             # Create layout: [Input1 | Input2 | Input3 | Target_Synth | Pred_Synth | Target_Seg | Pred_Seg]
             all_images = [
@@ -214,14 +228,20 @@ class MultiTaskLogger:
                 target_seg_slice, pred_seg_slice
             ]
             
-            # Normalize images
+            # Normalize images (except segmentation masks)
             normalized_images = []
-            for img in all_images:
-                img_norm = (img - img.min()) / (img.max() - img.min() + 1e-8)
+            for i, img in enumerate(all_images):
+                if i < 5: # Inputs and synthesis images need normalization
+                    img_norm = (img - img.min()) / (img.max() - img.min() + 1e-8)
+                else: # Segmentation masks are binary, no intensity normalization needed
+                    img_norm = img # Assuming 0 or 1 values for segmentation
                 normalized_images.append(img_norm)
             
             # Concatenate
             comparison = np.concatenate(normalized_images, axis=1)
+            
+            # For logging, segmentation should be grayscale or a specific color to distinguish
+            # Here we make it grayscale for simplicity, similar to other images
             comparison_rgb = np.stack([comparison] * 3, axis=-1)
             
             # Create caption
@@ -252,7 +272,8 @@ class MultiTaskLogger:
             "summary/train_synthesis_loss": train_losses["synthesis"],
             "summary/train_segmentation_loss": train_losses["segmentation"],
             "summary/val_synthesis_l1": val_metrics["synthesis_l1"],
-            "summary/val_synthesis_psnr": val_metrics.get("synthesis_psnr", 0.0),
+            "summary/val_synthesis_psnr": val_metrics["synthesis_psnr"], # Ensure this is always calculated
+            "summary/val_synthesis_ssim": val_metrics["synthesis_ssim"], # Add SSIM here
             "summary/val_seg_dice": val_metrics["seg_dice"],
             "summary/epoch_time": epoch_time,
         }, step=self.step)
@@ -277,36 +298,42 @@ def find_multitask_cases(data_dir, target_modality="T1CE"):
         "T2": "t2w.nii.gz"
     }
 
-    for item in os.listdir(data_dir):
-        if 'BraTS' in item and os.path.isdir(os.path.join(data_dir, item)):
-            case_path = os.path.join(data_dir, item)
+    # Use glob for more robust searching and handle nested structures like BraTS2023_00000/BraTS2023_00000
+    for subject_dir in glob.glob(os.path.join(data_dir, 'BraTS*/*BraTS*')):
+        item = os.path.basename(subject_dir) # Get the actual case ID from the directory name
+        
+        # Build file paths
+        files = {}
+        for modality, suffix in modality_files.items():
+            files[modality] = os.path.join(subject_dir, f"{item}-{suffix}")
+        
+        # Add segmentation file
+        seg_file = os.path.join(subject_dir, f"{item}-seg.nii.gz")
+        
+        # Check if all files exist
+        all_files_exist = True
+        for f in list(files.values()) + [seg_file]:
+            if not os.path.exists(f):
+                # print(f"Missing file: {f}") # For debugging
+                all_files_exist = False
+                break
+        
+        if all_files_exist:
+            # Get input modalities (exclude target)
+            input_modalities = [mod for mod in modality_files.keys() if mod != target_modality]
+            input_images = [files[mod] for mod in input_modalities]
             
-            # Build file paths
-            files = {}
-            for modality, suffix in modality_files.items():
-                files[modality] = os.path.join(case_path, f"{item}-{suffix}")
+            case_data = {
+                "input_image": input_images,  # 3 input modalities
+                "target_synthesis": files[target_modality],  # Missing modality
+                "target_segmentation": seg_file,  # Segmentation
+                "case_id": item,
+                "target_modality": target_modality
+            }
+            cases.append(case_data)
             
-            # Add segmentation file
-            seg_file = os.path.join(case_path, f"{item}-seg.nii.gz")
-            
-            # Check if all files exist
-            all_files = list(files.values()) + [seg_file]
-            if all(os.path.exists(f) for f in all_files):
-                # Get input modalities (exclude target)
-                input_modalities = [mod for mod in modality_files.keys() if mod != target_modality]
-                input_images = [files[mod] for mod in input_modalities]
-                
-                case_data = {
-                    "input_image": input_images,  # 3 input modalities
-                    "target_synthesis": files[target_modality],  # Missing modality
-                    "target_segmentation": seg_file,  # Segmentation
-                    "case_id": item,
-                    "target_modality": target_modality
-                }
-                cases.append(case_data)
-                
-                if len(cases) % 50 == 0:
-                    print(f"Found {len(cases)} valid cases so far...")
+            if len(cases) % 50 == 0:
+                print(f"Found {len(cases)} valid cases so far...")
     
     print(f"Total multi-task cases found: {len(cases)}")
     return cases
@@ -322,7 +349,8 @@ def multitask_train_epoch(model, loader, optimizer, epoch, loss_func, max_epochs
     for idx, batch_data in enumerate(loader):
         input_data = batch_data["input_image"].cuda()
         target_synthesis = batch_data["target_synthesis"].cuda()
-        target_segmentation = batch_data["target_segmentation"].cuda()
+        # Ensure target_segmentation is float for loss calculation
+        target_segmentation = batch_data["target_segmentation"].cuda().float() 
         
         optimizer.zero_grad()
         predicted = model(input_data)
@@ -374,6 +402,7 @@ def multitask_val_epoch(model, loader, epoch, max_epochs, target_modality, logge
     # Synthesis metrics
     run_synth_l1 = AverageMeter()
     run_synth_psnr = AverageMeter()
+    run_synth_ssim = AverageMeter()
     
     # Segmentation metrics
     dice_metric = DiceMetric(
@@ -387,16 +416,21 @@ def multitask_val_epoch(model, loader, epoch, max_epochs, target_modality, logge
     sample_inputs, sample_targets_synth, sample_targets_seg = [], [], []
     sample_preds_synth, sample_preds_seg, sample_names = [], [], []
     
-    roi = (128, 128, 128)
+    roi = (128, 128, 128) # For sliding window inference
     post_sigmoid = Activations(sigmoid=True)
-    post_pred = AsDiscrete(argmax=False, threshold=0.5)
+    post_pred_seg = AsDiscrete(threshold=0.5) # Binarize segmentation output at 0.5
+    
+    # Instantiate PSNR and SSIM metrics for validation
+    psnr_calculator = PSNRMetric(max_val=1.0)
+    ssim_calculator = SSIMMetric(data_range=1.0) # Assuming normalized input 0-1
     
     with torch.no_grad():
         for idx, batch_data in enumerate(loader):
             try:
                 input_data = batch_data["input_image"].cuda()
                 target_synthesis = batch_data["target_synthesis"].cuda()
-                target_segmentation = batch_data["target_segmentation"].cuda()
+                # Ensure target_segmentation is float for metrics
+                target_segmentation = batch_data["target_segmentation"].cuda().float() 
                 
                 # Use sliding window for variable sizes
                 predicted = sliding_window_inference(
@@ -413,59 +447,61 @@ def multitask_val_epoch(model, loader, epoch, max_epochs, target_modality, logge
                 
                 # Split predictions
                 pred_synthesis = predicted[:, 0:1, ...]
-                pred_segmentation = predicted[:, 1:2, ...]
+                pred_segmentation_raw = predicted[:, 1:2, ...] # Keep raw for sigmoid + threshold
                 
                 # Synthesis metrics
                 synth_l1 = F.l1_loss(pred_synthesis, target_synthesis)
                 run_synth_l1.update(synth_l1.item(), n=input_data.shape[0])
                 
                 # PSNR for synthesis
-                try:
-                    psnr_metric = PSNRMetric(max_val=1.0)
-                    psnr_val = psnr_metric(pred_synthesis, target_synthesis).item()
-                    run_synth_psnr.update(psnr_val, n=input_data.shape[0])
-                except:
-                    run_synth_psnr.update(0.0, n=input_data.shape[0])
+                # Ensure target and prediction are on the same device and float type
+                psnr_val = psnr_calculator(y_pred=pred_synthesis, y=target_synthesis).mean().item()
+                run_synth_psnr.update(psnr_val, n=input_data.shape[0])
+
+                # SSIM for synthesis
+                # Ensure target and prediction are on the same device and float type
+                ssim_val = ssim_calculator(y_pred=pred_synthesis, y=target_synthesis).mean().item()
+                run_synth_ssim.update(ssim_val, n=input_data.shape[0])
                 
                 # Segmentation metrics
-                try:
-                    pred_seg_sigmoid = post_sigmoid(pred_segmentation)
-                    pred_seg_discrete = post_pred(pred_seg_sigmoid)
-                    
-                    dice_metric.reset()
-                    dice_metric(y_pred=[pred_seg_discrete[0]], y=[target_segmentation[0]])
-                    dice_scores, _ = dice_metric.aggregate()
-                    
-                    # Store dice scores for later averaging
-                    if not hasattr(run_synth_l1, 'dice_scores'):
-                        run_synth_l1.dice_scores = []
-                    run_synth_l1.dice_scores.append(dice_scores.cpu().numpy())
-                    
-                except Exception as seg_error:
-                    print(f"Segmentation metric error: {seg_error}")
+                pred_seg_sigmoid = post_sigmoid(pred_segmentation_raw)
+                pred_seg_discrete = post_pred_seg(pred_seg_sigmoid) # Binarize prediction
                 
-                # Collect samples
+                dice_metric.reset()
+                # Ensure y and y_pred are lists of tensors for DiceMetric
+                dice_metric(y_pred=[pred_seg_discrete], y=[target_segmentation])
+                dice_scores, _ = dice_metric.aggregate() # Aggregate across batches
+                
+                # If dice_scores is a tensor with multiple values (e.g., if get_not_nans=False),
+                # we need to average them. If reduction=MEAN_BATCH, it should be a scalar.
+                dice_avg_batch = dice_scores.item() if dice_scores.ndim == 0 else dice_scores.mean().item()
+                
+                # Update a general average meter for dice
+                if not hasattr(run_synth_l1, 'overall_dice_scores'): # This is a temporary hack for storing list of dice scores
+                    run_synth_l1.overall_dice_scores = []
+                run_synth_l1.overall_dice_scores.append(dice_avg_batch) # Store mean batch dice
+
+                # Collect samples for logging
                 if len(sample_inputs) < 8:
                     sample_inputs.append(input_data[0].cpu().numpy())
                     sample_targets_synth.append(target_synthesis[0].cpu().numpy())
                     sample_targets_seg.append(target_segmentation[0].cpu().numpy())
                     sample_preds_synth.append(pred_synthesis[0].cpu().numpy())
-                    sample_preds_seg.append(pred_segmentation[0].cpu().numpy())
+                    sample_preds_seg.append(pred_seg_discrete[0].cpu().numpy()) # Store binarized for logging
                     sample_names.append(batch_data.get("case_id", [f"val_case_{idx}"])[0])
                 
                 if (idx + 1) % 10 == 0:
-                    print(f"Val [{idx+1}/{len(loader)}] Synth L1: {run_synth_l1.avg:.6f}")
+                    print(f"Val [{idx+1}/{len(loader)}] Synth L1: {run_synth_l1.avg:.6f} PSNR: {run_synth_psnr.avg:.2f} SSIM: {run_synth_ssim.avg:.4f} Seg Dice: {dice_avg_batch:.4f}")
                     
             except Exception as e:
                 print(f"Error in validation step {idx}: {e}")
                 continue
     
-    # Calculate average segmentation dice
-    if hasattr(run_synth_l1, 'dice_scores') and run_synth_l1.dice_scores:
-        all_dice = np.array(run_synth_l1.dice_scores)
-        dice_avg = np.mean(all_dice)
+    # Calculate overall average segmentation dice from collected batch averages
+    if hasattr(run_synth_l1, 'overall_dice_scores') and run_synth_l1.overall_dice_scores:
+        overall_dice_avg = np.mean(run_synth_l1.overall_dice_scores)
     else:
-        dice_avg = 0.0
+        overall_dice_avg = 0.0
     
     # Log validation samples
     logger.log_validation_samples(
@@ -476,7 +512,8 @@ def multitask_val_epoch(model, loader, epoch, max_epochs, target_modality, logge
     return {
         "synthesis_l1": run_synth_l1.avg,
         "synthesis_psnr": run_synth_psnr.avg,
-        "seg_dice": dice_avg
+        "synthesis_ssim": run_synth_ssim.avg,
+        "seg_dice": overall_dice_avg
     }
 
 
@@ -484,7 +521,8 @@ def get_multitask_transforms(roi):
     """Get transforms for multi-task learning"""
     train_transform = transforms.Compose([
         transforms.LoadImaged(keys=["input_image", "target_synthesis", "target_segmentation"]),
-        transforms.EnsureChannelFirstd(keys=["target_synthesis", "target_segmentation"]),
+        transforms.EnsureChannelFirstd(keys=["input_image", "target_synthesis", "target_segmentation"]),
+        # Normalize intensity for input and synthesis target, NOT segmentation target
         transforms.NormalizeIntensityd(keys=["input_image", "target_synthesis"], nonzero=True, channel_wise=True),
         transforms.CropForegroundd(
             keys=["input_image", "target_synthesis", "target_segmentation"],
@@ -497,18 +535,23 @@ def get_multitask_transforms(roi):
             roi_size=[roi[0], roi[1], roi[2]],
             random_size=False,
         ),
-        # Augmentation
+        # Augmentation (apply to all relevant keys)
         transforms.RandFlipd(keys=["input_image", "target_synthesis", "target_segmentation"], prob=0.5, spatial_axis=0),
         transforms.RandFlipd(keys=["input_image", "target_synthesis", "target_segmentation"], prob=0.5, spatial_axis=1),
         transforms.RandFlipd(keys=["input_image", "target_synthesis", "target_segmentation"], prob=0.5, spatial_axis=2),
         transforms.RandRotate90d(keys=["input_image", "target_synthesis", "target_segmentation"], prob=0.3, spatial_axes=(0, 1)),
         transforms.RandScaleIntensityd(keys=["input_image", "target_synthesis"], factors=0.1, prob=0.5),
         transforms.RandShiftIntensityd(keys=["input_image", "target_synthesis"], offsets=0.1, prob=0.5),
+        # Convert target_segmentation to float if it's not already (for DiceFocalLoss)
+        # Note: If your segmentation masks are already 0 and 1, this is fine.
+        # If they are multi-class integers, you might need a OneHot transform before this.
+        transforms.AsDiscreted(keys=["target_segmentation"], threshold=0.5, is_vector=False) # Ensure binary segmentation target
     ])
     
     val_transform = transforms.Compose([
         transforms.LoadImaged(keys=["input_image", "target_synthesis", "target_segmentation"]),
-        transforms.EnsureChannelFirstd(keys=["target_synthesis", "target_segmentation"]),
+        transforms.EnsureChannelFirstd(keys=["input_image", "target_synthesis", "target_segmentation"]),
+        # Normalize intensity for input and synthesis target, NOT segmentation target
         transforms.NormalizeIntensityd(keys=["input_image", "target_synthesis"], nonzero=True, channel_wise=True),
         transforms.CropForegroundd(
             keys=["input_image", "target_synthesis", "target_segmentation"],
@@ -522,12 +565,14 @@ def get_multitask_transforms(roi):
             mode="constant",
             constant_values=0,
         ),
+        # Convert target_segmentation to float (0 or 1) for validation metrics
+        transforms.AsDiscreted(keys=["target_segmentation"], threshold=0.5, is_vector=False) # Ensure binary segmentation target
     ])
     
     return train_transform, val_transform
 
 
-def train_single_multitask_model(target_modality, save_path, max_epochs=50, batch_size=2):
+def train_single_multitask_model(target_modality, save_dir, max_epochs=50, batch_size=2):
     """Train a single multi-task model for one missing modality"""
     
     print(f"\n=== TRAINING MULTI-TASK MODEL FOR {target_modality} ===")
@@ -540,7 +585,7 @@ def train_single_multitask_model(target_modality, save_path, max_epochs=50, batc
         config={
             "target_modality": target_modality,
             "max_epochs": max_epochs,
-            "save_path": save_path,
+            "save_dir": save_dir, # Renamed to save_dir to match usage
             "batch_size": batch_size,
             "roi": roi,
             "task": "synthesis_and_segmentation",
@@ -558,11 +603,18 @@ def train_single_multitask_model(target_modality, save_path, max_epochs=50, batc
     
     # Find data
     base_dir = "/app/UNETR-BraTS-Synthesis"
-    data_dir = os.path.join(base_dir, "ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData")
+    # Adjusted data_dir to properly reflect the nested structure if applicable,
+    # or ensure it points to the parent of BraTS* directories.
+    data_dir = os.path.join(base_dir, "ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData") 
     
     all_cases = find_multitask_cases(data_dir, target_modality=target_modality)
     print(f"Total cases found: {len(all_cases)}")
     
+    if not all_cases:
+        print("No cases found! Exiting training for this modality.")
+        wandb.finish()
+        return 0.0
+        
     # Split data
     np.random.seed(42)
     np.random.shuffle(all_cases)
@@ -584,7 +636,7 @@ def train_single_multitask_model(target_modality, save_path, max_epochs=50, batc
     val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=4, pin_memory=True)
     
     # Create model
-    model = MultiTaskSwinUNETR().cuda()
+    model = MultiTaskSwinUNETR().to(device) # Move model to device
     
     # Loss function
     loss_func = MultiTaskLoss(synthesis_weight=1.0, segmentation_weight=1.0)
@@ -599,7 +651,7 @@ def train_single_multitask_model(target_modality, save_path, max_epochs=50, batc
     print(f"Training multi-task model: {target_modality}")
     print(f"Input: 3 modalities, Output: 1 synthesis + 1 segmentation")
     
-    best_combined_score = 0.0
+    best_combined_score = -float('inf') # Initialize with negative infinity
     
     for epoch in range(max_epochs):
         print(f"\n=== EPOCH {epoch+1}/{max_epochs} ===")
@@ -624,16 +676,28 @@ def train_single_multitask_model(target_modality, save_path, max_epochs=50, batc
         logger.log_epoch_summary(epoch, train_losses, val_metrics, epoch_time)
         
         print(f"Validation: Synth L1: {val_metrics['synthesis_l1']:.6f}, "
+              f"Synth PSNR: {val_metrics['synthesis_psnr']:.2f}, "
+              f"Synth SSIM: {val_metrics['synthesis_ssim']:.4f}, "
               f"Seg Dice: {val_metrics['seg_dice']:.6f}")
         
-        # Combined score (you can adjust weights)
-        combined_score = (1.0 - val_metrics['synthesis_l1']) + val_metrics['seg_dice']
+        # Combined score (you can adjust weights) - Higher is better
+        # For L1, lower is better, so (1.0 - L1) makes higher better.
+        combined_score = (1.0 - val_metrics['synthesis_l1']) + val_metrics['synthesis_psnr']/100.0 + \
+                         val_metrics['synthesis_ssim'] + val_metrics['seg_dice']
         
         # Save best model
         if combined_score > best_combined_score:
             print(f"NEW BEST COMBINED SCORE! ({best_combined_score:.6f} --> {combined_score:.6f})")
             best_combined_score = combined_score
             
+            # Construct filename with metrics
+            filename = (f"multitask_{target_modality.lower()}_"
+                        f"L1{val_metrics['synthesis_l1']:.4f}_"
+                        f"PSNR{val_metrics['synthesis_psnr']:.2f}_"
+                        f"SSIM{val_metrics['synthesis_ssim']:.4f}_"
+                        f"Dice{val_metrics['seg_dice']:.4f}_best.pt")
+            save_path = os.path.join(save_dir, filename)
+
             torch.save({
                 'epoch': epoch + 1,
                 'model_state_dict': model.state_dict(),
@@ -652,7 +716,7 @@ def train_single_multitask_model(target_modality, save_path, max_epochs=50, batc
     
     print(f"\n🎉 {target_modality} TRAINING COMPLETE!")
     print(f"🏆 Best combined score: {best_combined_score:.6f}")
-    print(f"✓ Model saved to: {save_path}")
+    print(f"✓ Models for {target_modality} saved in: {save_dir}") # Indicate directory
     
     wandb.finish()
     
@@ -695,7 +759,7 @@ def main():
     results = {}
     
     for modality in modalities:
-        save_path = os.path.join(args.save_dir, f"multitask_{modality.lower()}_best.pt")
+        # Pass the directory, filename will be constructed inside train_single_multitask_model
         
         print(f"\n{'='*60}")
         print(f"🎯 STARTING {modality} MULTI-TASK TRAINING")
@@ -704,7 +768,7 @@ def main():
         try:
             score = train_single_multitask_model(
                 target_modality=modality,
-                save_path=save_path,
+                save_dir=args.save_dir, # Pass directory
                 max_epochs=args.max_epochs,
                 batch_size=args.batch_size
             )
@@ -713,7 +777,7 @@ def main():
             
         except Exception as e:
             print(f"❌ Error training {modality}: {e}")
-            results[modality] = 0.0
+            results[modality] = 0.0 # Assign a low score if training failed
     
     # Summary
     print(f"\n{'='*60}")
@@ -727,9 +791,9 @@ def main():
     print(f"\n🏆 Average score across all models: {avg_score:.6f}")
     print(f"📁 All models saved in: {args.save_dir}")
     print(f"\nNow you can use these models for inference that simultaneously:")
-    print(f"  • Synthesizes missing modalities")
-    print(f"  • Performs segmentation")
-    print(f"  • Each model takes 3 modalities → outputs 1 synthesis + 1 segmentation channel")
+    print(f"  • Synthesizes missing modalities")
+    print(f"  • Performs segmentation")
+    print(f"  • Each model takes 3 modalities → outputs 1 synthesis + 1 segmentation channel")
 
 
 if __name__ == "__main__":

@@ -52,4 +52,4 @@ done
 
 echo "Conversion complete! Created $((patient_num-1)) patient directories."
 echo "Now you can run FeTS segmentation:"
-echo "./squashfs-root/usr/bin/fets_cli_segment -d fets_formatted/ -a deepMedic -g 0 -t 0"
+echo "./squashfs-root/usr/bin/fets_cli_segment -d fets_formatted/ -a fets_singlet,fets_triplet -lF STAPLE,ITKVoting,SIMPLE,MajorityVoting -g 1 -t 0"

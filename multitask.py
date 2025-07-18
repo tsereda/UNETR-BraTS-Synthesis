@@ -556,7 +556,7 @@ def multitask_val_epoch(model, loader, epoch, max_epochs, target_modality, logge
                 # Calculate dice score
                 dice_metric.reset()
                 dice_metric(y_pred=pred_seg_discrete, y=target_segmentation)
-                dice_scores = dice_metric.aggregate()
+                dice_scores, not_nans  = dice_metric.aggregate()
                 
                 if isinstance(dice_scores, torch.Tensor):
                     dice_avg = dice_scores.mean().item()

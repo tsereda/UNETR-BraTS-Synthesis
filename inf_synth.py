@@ -154,6 +154,15 @@ def synthesize_modality(input_data, model, device):
     nonzero_voxels_input = np.sum(input_data_array > 0)
     total_voxels_input = input_data_array.size
     nonzero_fraction_input = nonzero_voxels_input / total_voxels_input
+    print(f"    Original image info:")
+    print(f"      Shape: {original_shape}")
+    print(f"      Reference dtype: {original_img.get_fdata().dtype}")
+
+    # Check nonzero voxel percentage for input/original image
+    input_data_array = original_img.get_fdata()
+    nonzero_voxels_input = np.sum(input_data_array > 0)
+    total_voxels_input = input_data_array.size
+    nonzero_fraction_input = nonzero_voxels_input / total_voxels_input
     print(f"    Input/original non-zero voxels: {nonzero_fraction_input:.1%} ({nonzero_voxels_input}/{total_voxels_input})")
     
     # Transforms (same as validation in training)

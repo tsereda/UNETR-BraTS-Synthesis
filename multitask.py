@@ -220,9 +220,17 @@ class MultiTaskLogger:
             target_synth_slice = target_synth[:, :, slice_idx]
             pred_synth_slice = pred_synth[:, :, slice_idx]
 
+
             # For multi-class: get argmax for mask visualization
             target_seg_slice = target_seg[:, :, slice_idx] if target_seg.ndim == 3 else np.argmax(target_seg[:, :, :, slice_idx], axis=0)
             pred_seg_slice = pred_seg[:, :, slice_idx] if pred_seg.ndim == 3 else np.argmax(pred_seg[:, :, :, slice_idx], axis=0)
+
+            # Debug: print unique values in masks
+            print("Unique values in pred_seg_slice:", np.unique(pred_seg_slice))
+            print("Unique values in target_seg_slice:", np.unique(target_seg_slice))
+
+            # Uncomment the next line to force background for visualization testing
+            # pred_seg_slice = np.zeros_like(pred_seg_slice)
 
             # Normalize images (inputs and synth)
             def norm_img(img):
@@ -233,12 +241,8 @@ class MultiTaskLogger:
             target_synth_slice = norm_img(target_synth_slice)
             pred_synth_slice = norm_img(pred_synth_slice)
 
-
             # Color map for BraTS classes to match seg.py:
             # 0: background (black), 1: TC (red), 2: ED (green), 4: ET (blue)
-            # Note: In seg.py, the visualization uses 1=TC (red), 2=ED (green), 4=ET (blue)
-            # We'll use the same mapping for consistency
-            # BraTS: 0=background (black), 1=TC (red), 2=ED (green), 4=ET (blue)
             class_colors = np.zeros((5, 3), dtype=np.uint8)
             class_colors[0] = [0, 0, 0]       # 0: background - black
             class_colors[1] = [255, 0, 0]     # 1: TC - red

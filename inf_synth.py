@@ -198,6 +198,220 @@ def analyze_reference_modalities(reference_files, target_modality):
         'ref_intensities': ref_intensities
     }
 
+def create_brain_mask(reference_files, target_shape):
+    """Create brain mask from reference modalities using Otsu thresholding"""
+    import numpy as np
+    from scipy import ndimage
+    from skimage.filters import threshold_otsu
+
+    combined_mask = np.zeros(target_shape, dtype=bool)
+
+    for ref_file in reference_files:
+        img = nib.load(ref_file)
+        data = img.get_fdata()
+
+        # Remove extreme outliers
+        nonzero = data[data > 0]
+        if nonzero.size == 0:
+            continue
+        p1, p99 = np.percentile(nonzero, [1, 99])
+        data_clean = np.clip(data, p1, p99)
+
+        # Otsu thresholding
+        try:
+            threshold = threshold_otsu(data_clean[data_clean > 0])
+        except Exception:
+            threshold = np.mean(data_clean[data_clean > 0])
+        brain_mask = data_clean > threshold * 0.3  # Lower threshold for inclusivity
+
+        # Morphological cleanup
+        brain_mask = ndimage.binary_fill_holes(brain_mask)
+        brain_mask = ndimage.binary_erosion(brain_mask, iterations=1)
+        brain_mask = ndimage.binary_dilation(brain_mask, iterations=2)
+
+        combined_mask |= brain_mask
+
+    combined_mask = ndimage.binary_fill_holes(combined_mask)
+    return combined_mask.astype(np.float32)
+
+def analyze_reference_modalities_enhanced(reference_files, target_modality, brain_mask):
+    """Enhanced analysis with brain mask consideration"""
+    import numpy as np
+
+    modality_characteristics = {
+        'FLAIR': {'typical_range': (100, 2500), 'prefer_dtype': np.int16},
+        'T1CE': {'typical_range': (100, 3000), 'prefer_dtype': np.int16},
+        'T1': {'typical_range': (100, 2800), 'prefer_dtype': np.int16},
+        'T2': {'typical_range': (100, 3200), 'prefer_dtype': np.int16}
+    }
+
+    ref_intensities = []
+    ref_dtypes = []
+
+    for ref_file in reference_files:
+        img = nib.load(ref_file)
+        data = img.get_fdata()
+        ref_dtypes.append(img.header.get_data_dtype())
+
+        brain_data = data[brain_mask > 0]
+        if len(brain_data) > 100:
+            p5, p95 = np.percentile(brain_data, [5, 95])
+            filtered_data = brain_data[(brain_data >= p5) & (brain_data <= p95)]
+            ref_intensities.extend(filtered_data.flatten())
+
+    if len(ref_intensities) > 0:
+        ref_intensities = np.array(ref_intensities)
+        target_min = max(np.percentile(ref_intensities, 10), 50)
+        target_max = min(np.percentile(ref_intensities, 90), 4000)
+        if target_max - target_min < 300:
+            center = (target_min + target_max) / 2
+            target_min = max(center - 400, 50)
+            target_max = center + 400
+    else:
+        target_min, target_max = modality_characteristics[target_modality]['typical_range']
+
+    target_dtype = np.int16
+    return {
+        'target_range': (target_min, target_max),
+        'target_dtype': target_dtype,
+        'ref_intensities': ref_intensities
+    }
+
+def synthesize_modality_enhanced(input_data, model, device, reference_files, target_modality):
+    """Enhanced synthesis with proper background masking and intensity control"""
+
+    reference_img = nib.load(input_data["input_image"][0])
+    original_shape = reference_img.shape
+    original_header = reference_img.header.copy()
+    original_affine = reference_img.affine.copy()
+
+    print(f"    Original image info:")
+    print(f"      Shape: {original_shape}")
+    print(f"      Reference dtype: {reference_img.get_fdata().dtype}")
+
+    brain_mask = create_brain_mask(reference_files, original_shape)
+
+    target_info = analyze_reference_modalities_enhanced(reference_files, target_modality, brain_mask)
+    target_min, target_max = target_info['target_range']
+    target_dtype = target_info['target_dtype']
+
+    print(f"    Target range: [{target_min:.1f}, {target_max:.1f}]")
+    print(f"    Target dtype: {target_dtype}")
+    print(f"    Brain mask coverage: {brain_mask.sum() / brain_mask.size:.1%}")
+
+    transform = transforms.Compose([
+        transforms.LoadImaged(keys=["input_image"]),
+        transforms.NormalizeIntensityd(keys=["input_image"], nonzero=True, channel_wise=True),
+        transforms.DivisiblePadd(
+            keys=["input_image"],
+            k=32,
+            mode="constant",
+            constant_values=0,
+        ),
+    ])
+
+    transformed = transform(input_data)
+    input_tensor = transformed["input_image"].unsqueeze(0).to(device)
+
+    print(f"    Input tensor shape: {input_tensor.shape}")
+
+    roi = (128, 128, 128)
+    with torch.no_grad():
+        prediction = sliding_window_inference(
+            inputs=input_tensor,
+            roi_size=roi,
+            sw_batch_size=1,
+            predictor=model,
+            overlap=0.5,
+            mode="gaussian",
+            sigma_scale=0.125,
+            padding_mode="constant",
+            cval=0.0,
+        )
+
+    result = prediction[0, 0].cpu().numpy()
+    print(f"    Raw prediction shape: {result.shape}, dtype: {result.dtype}")
+    print(f"    Raw prediction range: [{result.min():.6f}, {result.max():.6f}]")
+
+    if result.shape != original_shape:
+        print(f"    Cropping from {result.shape} to {original_shape}")
+        crop_slices = []
+        for i in range(3):
+            if result.shape[i] >= original_shape[i]:
+                start = (result.shape[i] - original_shape[i]) // 2
+                end = start + original_shape[i]
+                crop_slices.append(slice(start, end))
+            else:
+                crop_slices.append(slice(None))
+        result = result[tuple(crop_slices)]
+
+    print(f"    After cropping: {result.shape}")
+
+    # Step 1: Apply brain mask
+    result_masked = result * brain_mask
+    brain_voxels = result_masked[brain_mask > 0]
+    if len(brain_voxels) == 0:
+        print("    ⚠️  Warning: No brain voxels detected!")
+        brain_voxels = result.flatten()
+
+    # Step 2: Normalize brain tissue intensities
+    brain_min, brain_max = brain_voxels.min(), brain_voxels.max()
+    if brain_max > brain_min:
+        result_norm = np.zeros_like(result)
+        result_norm[brain_mask > 0] = (result_masked[brain_mask > 0] - brain_min) / (brain_max - brain_min)
+        result_enhanced = np.sqrt(np.clip(result_norm, 0, 1))
+    else:
+        result_enhanced = np.zeros_like(result)
+
+    print(f"    Brain tissue range: [{brain_min:.6f}, {brain_max:.6f}]")
+    print(f"    After enhancement: [{result_enhanced.min():.6f}, {result_enhanced.max():.6f}]")
+
+    # Step 3: Scale to target range (brain tissue only)
+    intensity_range = target_max - target_min
+    result_scaled = np.zeros_like(result_enhanced)
+    result_scaled[brain_mask > 0] = (result_enhanced[brain_mask > 0] * intensity_range + target_min)
+
+    # Ensure minimum intensity for brain tissue
+    brain_tissue_mask = result_scaled > 0
+    if np.sum(brain_tissue_mask) > 0:
+        min_brain_intensity = target_min + intensity_range * 0.1
+        result_scaled[brain_tissue_mask] = np.maximum(
+            result_scaled[brain_tissue_mask],
+            min_brain_intensity
+        )
+
+    print(f"    Scaled range: [{result_scaled.min():.1f}, {result_scaled.max():.1f}]")
+
+    # Step 4: Convert to target data type with proper clipping
+    if target_dtype == np.int16:
+        result_scaled = np.clip(result_scaled, -32768, 32767)
+        result_final = result_scaled.astype(np.int16)
+    elif target_dtype == np.uint16:
+        result_scaled = np.clip(result_scaled, 0, 65535)
+        result_final = result_scaled.astype(np.uint16)
+    else:
+        result_final = result_scaled.astype(np.float32)
+
+    print(f"    Final dtype: {result_final.dtype}")
+    print(f"    Final range: [{result_final.min():.1f}, {result_final.max():.1f}]")
+
+    nonzero_voxels = np.sum(result_final > 0)
+    total_voxels = result_final.size
+    nonzero_fraction = nonzero_voxels / total_voxels
+    brain_coverage = np.sum(result_final[brain_mask > 0] > 0) / np.sum(brain_mask > 0) if np.sum(brain_mask) > 0 else 0
+
+    print(f"    Non-zero voxels: {nonzero_fraction:.1%} ({nonzero_voxels}/{total_voxels})")
+    print(f"    Brain coverage: {brain_coverage:.1%}")
+
+    if nonzero_fraction > 0.8:
+        print(f"    ⚠️  Warning: Too many non-zero voxels ({nonzero_fraction:.1%})")
+    if brain_coverage < 0.9:
+        print(f"    ⚠️  Warning: Incomplete brain coverage ({brain_coverage:.1%})")
+
+    updated_header = original_header.copy()
+    updated_header.set_data_dtype(result_final.dtype)
+
+    return result_final, updated_header, original_affine
 
 def synthesize_modality(input_data, model, device, reference_files, target_modality):
     """Run synthesis inference with improved intensity scaling"""

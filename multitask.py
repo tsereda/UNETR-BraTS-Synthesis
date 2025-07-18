@@ -105,14 +105,15 @@ class MultiTaskLoss(nn.Module):
         # Synthesis loss (L1 + MSE)
         self.l1_loss = nn.L1Loss()
         self.mse_loss = nn.MSELoss()
-        # Segmentation loss (DiceFocal for multi-class)
-        self.seg_loss = DiceFocalLoss(
+        # Segmentation loss: DiceFocal + CrossEntropy
+        self.dice_focal_loss = DiceFocalLoss(
             to_onehot_y=True, # Output is multi-class, need one-hot conversion
             softmax=True,     # Apply softmax to prediction before loss calculation
             gamma=2.0,
             lambda_dice=1.0,
             lambda_focal=1.0,
         )
+        self.ce_loss = nn.CrossEntropyLoss()
     def forward(self, pred, target_synthesis, target_segmentation):
         # Split predictions
         pred_synthesis = pred[:, 0:1, ...]  # First channel
@@ -120,15 +121,20 @@ class MultiTaskLoss(nn.Module):
         # Synthesis loss
         synthesis_loss = self.l1_loss(pred_synthesis, target_synthesis) + \
                          0.5 * self.mse_loss(pred_synthesis, target_synthesis)
-        # Segmentation loss
-        segmentation_loss = self.seg_loss(pred_segmentation, target_segmentation.long())
+        # Segmentation loss: DiceFocal + CrossEntropy
+        dice_focal = self.dice_focal_loss(pred_segmentation, target_segmentation.long())
+        # CrossEntropy expects shape [B, C, ...] and target [B, ...] (not one-hot)
+        ce = self.ce_loss(pred_segmentation, target_segmentation.long())
+        segmentation_loss = dice_focal + ce
         # Combined loss
         total_loss = (self.synthesis_weight * synthesis_loss + 
                       self.segmentation_weight * segmentation_loss)
         return total_loss, {
             "total": total_loss.item(),
             "synthesis": synthesis_loss.item(),
-            "segmentation": segmentation_loss.item()
+            "segmentation": segmentation_loss.item(),
+            "seg_dicefocal": dice_focal.item(),
+            "seg_ce": ce.item()
         }
 
 

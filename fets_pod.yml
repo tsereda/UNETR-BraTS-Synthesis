@@ -78,6 +78,8 @@ spec:
         /workspace/FeTS_0.0.9/FeTS/0.0.9/FeTS-0.0.9.bin --appimage-extract
 
         ./squashfs-root/usr/bin/fets_cli_segment -d fets_formatted/ -a fets_singlet,fets_triplet -lF STAPLE,ITKVoting,SIMPLE,MajorityVoting -g 1 -t 0
+
+        ls -la fets_formatted/Patient_033/dmOut/predictions/testApiSession/predictions/
         
         tail -f /dev/null
     volumeMounts:

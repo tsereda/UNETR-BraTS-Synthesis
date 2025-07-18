@@ -60,66 +60,57 @@ class AverageMeter(object):
 
 
 class MultiTaskSwinUNETR(nn.Module):
-    """SwinUNETR for multi-task learning: synthesis + segmentation"""
-    
-    def __init__(self):
+    """SwinUNETR for multi-task learning: synthesis + multi-class segmentation"""
+    def __init__(self, num_segmentation_classes=4):
         super().__init__()
         # 3 input channels (3 available modalities)
-        # 2 output channels: 1 for synthesis + 1 for segmentation
+        # 1 for synthesis + N for segmentation
+        self.num_segmentation_classes = num_segmentation_classes
         self.backbone = SwinUNETR(
             in_channels=3,
-            out_channels=2,  # 1 synthesis + 1 segmentation
+            out_channels=1 + num_segmentation_classes,  # 1 synthesis + N segmentation
             feature_size=48,
             drop_rate=0.0,
             attn_drop_rate=0.0,
             dropout_path_rate=0.0,
             use_checkpoint=True,
         )
-        
-        print(f"✓ Multi-task model initialized: 3 input → 2 output channels (1 synthesis + 1 segmentation)")
+        print(f"✓ Multi-task model initialized: 3 input → 1 synthesis + {num_segmentation_classes} segmentation channels")
 
     def forward(self, x):
         return self.backbone(x)
 
 
 class MultiTaskLoss(nn.Module):
-    """Combined loss for synthesis and segmentation"""
-    
-    def __init__(self, synthesis_weight=1.0, segmentation_weight=1.0):
+    """Combined loss for synthesis and multi-class segmentation"""
+    def __init__(self, synthesis_weight=1.0, segmentation_weight=1.0, num_segmentation_classes=4):
         super().__init__()
         self.synthesis_weight = synthesis_weight
         self.segmentation_weight = segmentation_weight
-        
+        self.num_segmentation_classes = num_segmentation_classes
         # Synthesis loss (L1 + MSE)
         self.l1_loss = nn.L1Loss()
         self.mse_loss = nn.MSELoss()
-        
-        # Segmentation loss (DiceFocal for single channel)
+        # Segmentation loss (DiceFocal for multi-class)
         self.seg_loss = DiceFocalLoss(
-            to_onehot_y=False, # Output is already 1 channel, no need for one-hot conversion
-            sigmoid=True,      # Apply sigmoid to prediction before loss calculation
+            to_onehot_y=True, # Output is multi-class, need one-hot conversion
+            softmax=True,     # Apply softmax to prediction before loss calculation
             gamma=2.0,
             lambda_dice=1.0,
             lambda_focal=1.0,
         )
-        
     def forward(self, pred, target_synthesis, target_segmentation):
         # Split predictions
         pred_synthesis = pred[:, 0:1, ...]  # First channel
-        pred_segmentation = pred[:, 1:2, ...]  # Second channel
-        
+        pred_segmentation = pred[:, 1:1+self.num_segmentation_classes, ...]  # Next N channels
         # Synthesis loss
         synthesis_loss = self.l1_loss(pred_synthesis, target_synthesis) + \
                          0.5 * self.mse_loss(pred_synthesis, target_synthesis)
-        
         # Segmentation loss
-        # Ensure target_segmentation is float for loss calculation if it's coming in as long/int
-        segmentation_loss = self.seg_loss(pred_segmentation, target_segmentation.float())
-        
+        segmentation_loss = self.seg_loss(pred_segmentation, target_segmentation.long())
         # Combined loss
         total_loss = (self.synthesis_weight * synthesis_loss + 
                       self.segmentation_weight * segmentation_loss)
-        
         return total_loss, {
             "total": total_loss.item(),
             "synthesis": synthesis_loss.item(),
@@ -517,12 +508,11 @@ def multitask_val_epoch(model, loader, epoch, max_epochs, target_modality, logge
     }
 
 
-def get_multitask_transforms(roi):
-    """Get transforms for multi-task learning"""
+def get_multitask_transforms(roi, num_segmentation_classes=4):
+    """Get transforms for multi-task learning (multi-class segmentation)"""
     train_transform = transforms.Compose([
         transforms.LoadImaged(keys=["input_image", "target_synthesis", "target_segmentation"]),
         transforms.EnsureChannelFirstd(keys=["input_image", "target_synthesis", "target_segmentation"]),
-        # Normalize intensity for input and synthesis target, NOT segmentation target
         transforms.NormalizeIntensityd(keys=["input_image", "target_synthesis"], nonzero=True, channel_wise=True),
         transforms.CropForegroundd(
             keys=["input_image", "target_synthesis", "target_segmentation"],
@@ -535,23 +525,20 @@ def get_multitask_transforms(roi):
             roi_size=[roi[0], roi[1], roi[2]],
             random_size=False,
         ),
-        # Augmentation (apply to all relevant keys)
         transforms.RandFlipd(keys=["input_image", "target_synthesis", "target_segmentation"], prob=0.5, spatial_axis=0),
         transforms.RandFlipd(keys=["input_image", "target_synthesis", "target_segmentation"], prob=0.5, spatial_axis=1),
         transforms.RandFlipd(keys=["input_image", "target_synthesis", "target_segmentation"], prob=0.5, spatial_axis=2),
         transforms.RandRotate90d(keys=["input_image", "target_synthesis", "target_segmentation"], prob=0.3, spatial_axes=(0, 1)),
         transforms.RandScaleIntensityd(keys=["input_image", "target_synthesis"], factors=0.1, prob=0.5),
         transforms.RandShiftIntensityd(keys=["input_image", "target_synthesis"], offsets=0.1, prob=0.5),
-        # Convert target_segmentation to float if it's not already (for DiceFocalLoss)
-        # Note: If your segmentation masks are already 0 and 1, this is fine.
-        # If they are multi-class integers, you might need a OneHot transform before this.
-        transforms.AsDiscreted(keys=["target_segmentation"], threshold=0.5, is_vector=False) # Ensure binary segmentation target
+        # Convert target_segmentation to one-hot for multi-class segmentation
+        transforms.EnsureTyped(keys=["target_segmentation"], dtype=np.int64),
+        transforms.EnsureTyped(keys=["target_segmentation"], dtype=int),
+        transforms.Lambdad(keys=["target_segmentation"], func=lambda x: x.astype(np.int64)),
     ])
-    
     val_transform = transforms.Compose([
         transforms.LoadImaged(keys=["input_image", "target_synthesis", "target_segmentation"]),
         transforms.EnsureChannelFirstd(keys=["input_image", "target_synthesis", "target_segmentation"]),
-        # Normalize intensity for input and synthesis target, NOT segmentation target
         transforms.NormalizeIntensityd(keys=["input_image", "target_synthesis"], nonzero=True, channel_wise=True),
         transforms.CropForegroundd(
             keys=["input_image", "target_synthesis", "target_segmentation"],
@@ -565,19 +552,16 @@ def get_multitask_transforms(roi):
             mode="constant",
             constant_values=0,
         ),
-        # Convert target_segmentation to float (0 or 1) for validation metrics
-        transforms.AsDiscreted(keys=["target_segmentation"], threshold=0.5, is_vector=False) # Ensure binary segmentation target
+        transforms.EnsureTyped(keys=["target_segmentation"], dtype=np.int64),
+        transforms.EnsureTyped(keys=["target_segmentation"], dtype=int),
+        transforms.Lambdad(keys=["target_segmentation"], func=lambda x: x.astype(np.int64)),
     ])
-    
     return train_transform, val_transform
 
 
-def train_single_multitask_model(target_modality, save_dir, max_epochs=50, batch_size=2):
-    """Train a single multi-task model for one missing modality"""
-    
+def train_single_multitask_model(target_modality, save_dir, max_epochs=50, batch_size=2, num_segmentation_classes=4):
+    """Train a single multi-task model for one missing modality (multi-class segmentation)"""
     print(f"\n=== TRAINING MULTI-TASK MODEL FOR {target_modality} ===")
-    
-    # Initialize W&B
     roi = (96, 96, 96)
     wandb.init(
         project="BraTS2025-MultiTask",
@@ -585,119 +569,76 @@ def train_single_multitask_model(target_modality, save_dir, max_epochs=50, batch
         config={
             "target_modality": target_modality,
             "max_epochs": max_epochs,
-            "save_dir": save_dir, # Renamed to save_dir to match usage
+            "save_dir": save_dir,
             "batch_size": batch_size,
             "roi": roi,
             "task": "synthesis_and_segmentation",
             "input_channels": 3,
-            "output_channels": 2,
+            "output_channels": 1 + num_segmentation_classes,
             "synthesis_weight": 1.0,
             "segmentation_weight": 1.0,
+            "num_segmentation_classes": num_segmentation_classes,
         }
     )
-    
-    # Setup device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     print(f"Using batch size: {batch_size}")
-    
-    # Find data
     base_dir = "/app/UNETR-BraTS-Synthesis"
-    # Adjusted data_dir to properly reflect the nested structure if applicable,
-    # or ensure it points to the parent of BraTS* directories.
-    data_dir = os.path.join(base_dir, "ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData") 
-    
+    data_dir = os.path.join(base_dir, "ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData")
     all_cases = find_multitask_cases(data_dir, target_modality=target_modality)
     print(f"Total cases found: {len(all_cases)}")
-    
     if not all_cases:
         print("No cases found! Exiting training for this modality.")
         wandb.finish()
         return 0.0
-        
-    # Split data
     np.random.seed(42)
     np.random.shuffle(all_cases)
     split_idx = int(0.8 * len(all_cases))
     train_cases = all_cases[:split_idx]
     val_cases = all_cases[split_idx:]
-    
     print(f"Training cases: {len(train_cases)}")
     print(f"Validation cases: {len(val_cases)}")
-    
-    # Get transforms
-    train_transform, val_transform = get_multitask_transforms(roi)
-    
-    # Data loaders
+    train_transform, val_transform = get_multitask_transforms(roi, num_segmentation_classes=num_segmentation_classes)
     train_ds = Dataset(data=train_cases, transform=train_transform)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=6, pin_memory=True)
-    
     val_ds = Dataset(data=val_cases, transform=val_transform)
     val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=4, pin_memory=True)
-    
-    # Create model
-    model = MultiTaskSwinUNETR().to(device) # Move model to device
-    
-    # Loss function
-    loss_func = MultiTaskLoss(synthesis_weight=1.0, segmentation_weight=1.0)
-    
-    # Optimizer
+    model = MultiTaskSwinUNETR(num_segmentation_classes=num_segmentation_classes).to(device)
+    loss_func = MultiTaskLoss(synthesis_weight=1.0, segmentation_weight=1.0, num_segmentation_classes=num_segmentation_classes)
     optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_epochs, eta_min=1e-6)
-    
-    # Logger
     logger = MultiTaskLogger(target_modality)
-    
     print(f"Training multi-task model: {target_modality}")
-    print(f"Input: 3 modalities, Output: 1 synthesis + 1 segmentation")
-    
-    best_combined_score = -float('inf') # Initialize with negative infinity
-    
+    print(f"Input: 3 modalities, Output: 1 synthesis + {num_segmentation_classes} segmentation")
+    best_combined_score = -float('inf')
     for epoch in range(max_epochs):
         print(f"\n=== EPOCH {epoch+1}/{max_epochs} ===")
         epoch_start = time.time()
-        
-        # Training
         train_losses = multitask_train_epoch(
             model, train_loader, optimizer, epoch,
             loss_func, max_epochs, target_modality, logger
         )
-        
         print(f"Training complete: Total: {train_losses['total']:.4f}")
-        
-        # Validation
         val_metrics = multitask_val_epoch(
             model, val_loader, epoch, max_epochs, target_modality, logger
         )
-        
         epoch_time = time.time() - epoch_start
-        
-        # Log epoch summary
         logger.log_epoch_summary(epoch, train_losses, val_metrics, epoch_time)
-        
         print(f"Validation: Synth L1: {val_metrics['synthesis_l1']:.6f}, "
               f"Synth PSNR: {val_metrics['synthesis_psnr']:.2f}, "
               f"Synth SSIM: {val_metrics['synthesis_ssim']:.4f}, "
               f"Seg Dice: {val_metrics['seg_dice']:.6f}")
-        
-        # Combined score (you can adjust weights) - Higher is better
-        # For L1, lower is better, so (1.0 - L1) makes higher better.
         combined_score = (1.0 - val_metrics['synthesis_l1']) + val_metrics['synthesis_psnr']/100.0 + \
                          val_metrics['synthesis_ssim'] + val_metrics['seg_dice']
-        
-        # Save best model
         if combined_score > best_combined_score:
             print(f"NEW BEST COMBINED SCORE! ({best_combined_score:.6f} --> {combined_score:.6f})")
             best_combined_score = combined_score
-            
-            # Construct filename with metrics
             filename = (f"multitask_{target_modality.lower()}_"
                         f"L1{val_metrics['synthesis_l1']:.4f}_"
                         f"PSNR{val_metrics['synthesis_psnr']:.2f}_"
                         f"SSIM{val_metrics['synthesis_ssim']:.4f}_"
                         f"Dice{val_metrics['seg_dice']:.4f}_best.pt")
             save_path = os.path.join(save_dir, filename)
-
             torch.save({
                 'epoch': epoch + 1,
                 'model_state_dict': model.state_dict(),
@@ -708,18 +649,14 @@ def train_single_multitask_model(target_modality, save_dir, max_epochs=50, batch
                 'target_modality': target_modality,
                 'task': 'multitask_synthesis_segmentation',
                 'input_channels': 3,
-                'output_channels': 2,
+                'output_channels': 1 + num_segmentation_classes,
             }, save_path)
             print(f"✓ Best model saved to: {save_path}")
-        
         scheduler.step()
-    
     print(f"\n🎉 {target_modality} TRAINING COMPLETE!")
     print(f"🏆 Best combined score: {best_combined_score:.6f}")
-    print(f"✓ Models for {target_modality} saved in: {save_dir}") # Indicate directory
-    
+    print(f"✓ Models for {target_modality} saved in: {save_dir}")
     wandb.finish()
-    
     return best_combined_score
 
 
@@ -740,61 +677,45 @@ def parse_args():
 
 def main():
     args = parse_args()
-    
-    # Create save directory
     os.makedirs(args.save_dir, exist_ok=True)
-    
-    # Define modalities
     modalities = ['FLAIR', 'T1CE', 'T1', 'T2']
-    
     if args.target_modality != 'all':
         modalities = [args.target_modality]
-    
     print(f"🚀 MULTI-TASK TRAINING: Synthesis + Segmentation")
     print(f"📊 Training {len(modalities)} model(s)")
     print(f"💾 Models will be saved to: {args.save_dir}")
     print(f"📦 Batch size: {args.batch_size}")
     print(f"🔢 Max epochs: {args.max_epochs}")
-    
     results = {}
-    
     for modality in modalities:
-        # Pass the directory, filename will be constructed inside train_single_multitask_model
-        
         print(f"\n{'='*60}")
         print(f"🎯 STARTING {modality} MULTI-TASK TRAINING")
         print(f"{'='*60}")
-        
         try:
             score = train_single_multitask_model(
                 target_modality=modality,
-                save_dir=args.save_dir, # Pass directory
+                save_dir=args.save_dir,
                 max_epochs=args.max_epochs,
-                batch_size=args.batch_size
+                batch_size=args.batch_size,
+                num_segmentation_classes=4
             )
             results[modality] = score
             print(f"✅ {modality} completed with score: {score:.6f}")
-            
         except Exception as e:
             print(f"❌ Error training {modality}: {e}")
-            results[modality] = 0.0 # Assign a low score if training failed
-    
-    # Summary
+            results[modality] = 0.0
     print(f"\n{'='*60}")
     print(f"🏁 ALL MULTI-TASK TRAINING COMPLETE!")
     print(f"{'='*60}")
-    
     for modality, score in results.items():
         print(f"🎯 {modality}: {score:.6f}")
-    
     avg_score = np.mean(list(results.values()))
     print(f"\n🏆 Average score across all models: {avg_score:.6f}")
     print(f"📁 All models saved in: {args.save_dir}")
     print(f"\nNow you can use these models for inference that simultaneously:")
     print(f"  • Synthesizes missing modalities")
     print(f"  • Performs segmentation")
-    print(f"  • Each model takes 3 modalities → outputs 1 synthesis + 1 segmentation channel")
-
+    print(f"  • Each model takes 3 modalities → outputs 1 synthesis + 4 segmentation channels")
 
 if __name__ == "__main__":
     main()

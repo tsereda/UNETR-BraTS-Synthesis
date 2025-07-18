@@ -118,6 +118,9 @@ class MultiTaskLoss(nn.Module):
         # Split predictions
         pred_synthesis = pred[:, 0:1, ...]  # First channel
         pred_segmentation = pred[:, 1:1+self.num_segmentation_classes, ...]  # Next N channels
+        # Ensure target_synthesis has channel dim [B, 1, ...]
+        if target_synthesis.dim() == 4:
+            target_synthesis = target_synthesis.unsqueeze(1)
         # Synthesis loss
         synthesis_loss = self.l1_loss(pred_synthesis, target_synthesis) + \
                          0.5 * self.mse_loss(pred_synthesis, target_synthesis)

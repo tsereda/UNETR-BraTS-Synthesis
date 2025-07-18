@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Quick BraTS Training Data Visualization with WandB
 Shows all 4 modalities + segmentation for first 5 training cases
@@ -73,22 +72,44 @@ def load_and_normalize_image(file_path):
 
 
 def create_segmentation_overlay(seg_data):
-    """Create colored segmentation overlay with distinct colors"""
+    """Create colored segmentation overlay matching BraTS color scheme"""
     # Convert to RGB
     seg_colored = np.zeros((*seg_data.shape, 3), dtype=np.uint8)
     
     # Background: black
     seg_colored[seg_data == 0] = [0, 0, 0]
-    # Label 1: bright red
-    seg_colored[seg_data == 1] = [255, 0, 0]
-    # Label 2: bright green  
+    # Label 1 (Necrotic Core): Yellow/Orange
+    seg_colored[seg_data == 1] = [255, 255, 0]
+    # Label 2 (Edema): Green  
     seg_colored[seg_data == 2] = [0, 255, 0]
-    # Label 3: bright blue (this is what was showing as yellow!)
-    seg_colored[seg_data == 3] = [0, 100, 255]
-    # Label 4: bright cyan (if present)
-    seg_colored[seg_data == 4] = [0, 255, 255]
+    # Label 3 (Enhancing): Red
+    seg_colored[seg_data == 3] = [255, 0, 0]
+    # Label 4: Red (if present)
+    seg_colored[seg_data == 4] = [255, 0, 0]
     
     return seg_colored
+
+
+def crop_brain_region(image_data, margin=10):
+    """Crop image to focus on brain region, removing empty background"""
+    # Find non-zero regions (brain tissue)
+    non_zero = np.where(image_data > image_data.mean() * 0.1)
+    
+    if len(non_zero[0]) == 0:  # Fallback if no brain found
+        return image_data
+    
+    # Get bounding box
+    min_x, max_x = non_zero[0].min(), non_zero[0].max()
+    min_y, max_y = non_zero[1].min(), non_zero[1].max()
+    
+    # Add margin
+    min_x = max(0, min_x - margin)
+    max_x = min(image_data.shape[0], max_x + margin)
+    min_y = max(0, min_y - margin)
+    max_y = min(image_data.shape[1], max_y + margin)
+    
+    # Crop
+    return image_data[min_x:max_x, min_y:max_y]
 
 
 def find_best_slice(seg_data, slice_range=(70, 85)):
@@ -150,7 +171,7 @@ def visualize_case(case_data, slice_range=(70, 85)):
     seg_colored = create_segmentation_overlay(seg_slice)
     
     # Create simple 1x5 layout
-    fig, axes = plt.subplots(1, 5, figsize=(20, 4))
+    fig, axes = plt.subplots(1, 5, figsize=(20, 5))  # Slightly taller since we're cropping
     
     # All 5 images in a row
     axes[0].imshow(flair_slice, cmap='gray')
@@ -170,12 +191,12 @@ def visualize_case(case_data, slice_range=(70, 85)):
     axes[3].axis('off')
     
     axes[4].imshow(seg_colored)
-    axes[4].set_title('Seg (1=Red, 2=Green, 3=Blue)', fontsize=14, fontweight='bold')
+    axes[4].set_title('Segmentation', fontsize=14, fontweight='bold')
     axes[4].axis('off')
     
     # Simple title
-    plt.suptitle(f'{case_id} - Slice {best_slice}', fontsize=16, fontweight='bold')
-    plt.tight_layout()
+    plt.suptitle(f'{case_id} - Slice {best_slice}', fontsize=18, fontweight='bold')
+    plt.tight_layout(rect=[0, 0, 1, 0.95])  # Leave space for title
     
     return fig, {"case_id": case_id, "slice_idx": best_slice}
 
@@ -184,13 +205,15 @@ def main():
     # Initialize W&B
     wandb.init(
         project="BraTS-Data-Visualization",
-        name="simple_5_images",
+        name="cropped_brain_regions",
         config={
             "dataset": "BraTS2023-GLI-Challenge-TrainingData",
             "num_cases": 5,
             "slice_range": [70, 85],
-            "layout": "1x5 (FLAIR, T1CE, T1, T2, Segmentation)",
-            "description": "Simple showcase: 5 images per case"
+            "layout": "1x5 cropped (FLAIR, T1CE, T1, T2, Segmentation)",
+            "colors": "Yellow=Necrotic, Green=Edema, Red=Enhancing",
+            "cropping": "Brain region only, 10px margin",
+            "description": "Clean brain-focused visualizations"
         }
     )
     

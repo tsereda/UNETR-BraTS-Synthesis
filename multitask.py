@@ -121,6 +121,12 @@ class MultiTaskLoss(nn.Module):
         # Ensure target_synthesis has channel dim [B, 1, ...]
         if target_synthesis.dim() == 4:
             target_synthesis = target_synthesis.unsqueeze(1)
+        # Debug: print shapes before loss calculation
+        if pred_synthesis.shape != target_synthesis.shape:
+            print(f"[DEBUG] pred_synthesis shape: {pred_synthesis.shape}, target_synthesis shape: {target_synthesis.shape}")
+            # Try to squeeze channel dim if needed
+            if target_synthesis.shape[1] == 1 and pred_synthesis.shape == (target_synthesis.shape[0],) + target_synthesis.shape[2:]:
+                target_synthesis = target_synthesis.squeeze(1)
         # Synthesis loss
         synthesis_loss = self.l1_loss(pred_synthesis, target_synthesis) + \
                          0.5 * self.mse_loss(pred_synthesis, target_synthesis)

@@ -511,7 +511,7 @@ def multitask_val_epoch(model, loader, epoch, max_epochs, target_modality, logge
 
     # Metrics calculators
     psnr_calculator = PSNRMetric(max_val=1.0)
-    ssim_calculator = SSIMMetric(data_range=1.0)
+    ssim_calculator = SSIMMetric(spatial_dims=3, data_range=1.0)
     
     all_dice_scores = []
 

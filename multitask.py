@@ -408,34 +408,33 @@ def multitask_val_epoch(model, loader, epoch, max_epochs, target_modality, logge
     run_synth_psnr = AverageMeter()
     run_synth_ssim = AverageMeter()
     
-    # Segmentation metrics
+    # Segmentation metrics (multi-class)
     dice_metric = DiceMetric(
         include_background=True,
         reduction=MetricReduction.MEAN_BATCH,
         get_not_nans=True,
         ignore_empty=False
     )
-    
+
     # Collect samples
     sample_inputs, sample_targets_synth, sample_targets_seg = [], [], []
     sample_preds_synth, sample_preds_seg, sample_names = [], [], []
-    
+
     roi = (128, 128, 128) # For sliding window inference
-    post_sigmoid = Activations(sigmoid=True)
-    post_pred_seg = AsDiscrete(threshold=0.5) # Binarize segmentation output at 0.5
-    
+    post_softmax = Activations(softmax=True)
+    post_pred_seg = AsDiscrete(argmax=True)  # Use argmax for multi-class
+
     # Instantiate PSNR and SSIM metrics for validation
     psnr_calculator = PSNRMetric(max_val=1.0)
     ssim_calculator = SSIMMetric(data_range=1.0) # Assuming normalized input 0-1
-    
+
     with torch.no_grad():
         for idx, batch_data in enumerate(loader):
             try:
                 input_data = batch_data["input_image"].cuda()
                 target_synthesis = batch_data["target_synthesis"].cuda()
-                # Ensure target_segmentation is float for metrics
-                target_segmentation = batch_data["target_segmentation"].cuda().float() 
-                
+                target_segmentation = batch_data["target_segmentation"].cuda().long()  # Ensure long for multi-class
+
                 # Use sliding window for variable sizes
                 predicted = sliding_window_inference(
                     inputs=input_data,
@@ -448,42 +447,39 @@ def multitask_val_epoch(model, loader, epoch, max_epochs, target_modality, logge
                     padding_mode="constant",
                     cval=0.0,
                 )
-                
+
                 # Split predictions
                 pred_synthesis = predicted[:, 0:1, ...]
-                pred_segmentation_raw = predicted[:, 1:2, ...] # Keep raw for sigmoid + threshold
-                
+                pred_segmentation_raw = predicted[:, 1:1+4, ...]  # 4 segmentation channels
+
                 # Synthesis metrics
                 synth_l1 = F.l1_loss(pred_synthesis, target_synthesis)
                 run_synth_l1.update(synth_l1.item(), n=input_data.shape[0])
-                
+
                 # PSNR for synthesis
-                # Ensure target and prediction are on the same device and float type
                 psnr_val = psnr_calculator(y_pred=pred_synthesis, y=target_synthesis).mean().item()
                 run_synth_psnr.update(psnr_val, n=input_data.shape[0])
 
                 # SSIM for synthesis
-                # Ensure target and prediction are on the same device and float type
                 ssim_val = ssim_calculator(y_pred=pred_synthesis, y=target_synthesis).mean().item()
                 run_synth_ssim.update(ssim_val, n=input_data.shape[0])
-                
-                # Segmentation metrics
-                pred_seg_sigmoid = post_sigmoid(pred_segmentation_raw)
-                pred_seg_discrete = post_pred_seg(pred_seg_sigmoid) # Binarize prediction
-                
+
+                # Segmentation metrics (multi-class, per-class dice)
+                pred_seg_softmax = post_softmax(pred_segmentation_raw)
+                pred_seg_discrete = post_pred_seg(pred_seg_softmax)  # Argmax for multi-class
+
                 dice_metric.reset()
-                # Ensure y and y_pred are lists of tensors for DiceMetric
                 dice_metric(y_pred=[pred_seg_discrete], y=[target_segmentation])
-                dice_scores, _ = dice_metric.aggregate() # Aggregate across batches
-                
-                # If dice_scores is a tensor with multiple values (e.g., if get_not_nans=False),
-                # we need to average them. If reduction=MEAN_BATCH, it should be a scalar.
-                dice_avg_batch = dice_scores.item() if dice_scores.ndim == 0 else dice_scores.mean().item()
-                
-                # Update a general average meter for dice
-                if not hasattr(run_synth_l1, 'overall_dice_scores'): # This is a temporary hack for storing list of dice scores
+                dice_scores, _ = dice_metric.aggregate()
+
+                # dice_scores: (num_classes,) tensor
+                dice_scores_np = dice_scores.cpu().numpy() if hasattr(dice_scores, 'cpu') else np.array(dice_scores)
+                dice_avg_batch = np.nanmean(dice_scores_np)
+
+                # Store per-class dice for later analysis if needed
+                if not hasattr(run_synth_l1, 'overall_dice_scores'):
                     run_synth_l1.overall_dice_scores = []
-                run_synth_l1.overall_dice_scores.append(dice_avg_batch) # Store mean batch dice
+                run_synth_l1.overall_dice_scores.append(dice_scores_np)
 
                 # Collect samples for logging
                 if len(sample_inputs) < 8:
@@ -491,28 +487,29 @@ def multitask_val_epoch(model, loader, epoch, max_epochs, target_modality, logge
                     sample_targets_synth.append(target_synthesis[0].cpu().numpy())
                     sample_targets_seg.append(target_segmentation[0].cpu().numpy())
                     sample_preds_synth.append(pred_synthesis[0].cpu().numpy())
-                    sample_preds_seg.append(pred_seg_discrete[0].cpu().numpy()) # Store binarized for logging
+                    sample_preds_seg.append(pred_seg_discrete[0].cpu().numpy())
                     sample_names.append(batch_data.get("case_id", [f"val_case_{idx}"])[0])
-                
+
                 if (idx + 1) % 10 == 0:
                     print(f"Val [{idx+1}/{len(loader)}] Synth L1: {run_synth_l1.avg:.6f} PSNR: {run_synth_psnr.avg:.2f} SSIM: {run_synth_ssim.avg:.4f} Seg Dice: {dice_avg_batch:.4f}")
-                    
+
             except Exception as e:
                 print(f"Error in validation step {idx}: {e}")
                 continue
-    
+
     # Calculate overall average segmentation dice from collected batch averages
     if hasattr(run_synth_l1, 'overall_dice_scores') and run_synth_l1.overall_dice_scores:
-        overall_dice_avg = np.mean(run_synth_l1.overall_dice_scores)
+        all_dice = np.stack(run_synth_l1.overall_dice_scores, axis=0)  # (num_batches, num_classes)
+        overall_dice_avg = np.nanmean(all_dice)
     else:
         overall_dice_avg = 0.0
-    
+
     # Log validation samples
     logger.log_validation_samples(
         sample_inputs, sample_targets_synth, sample_targets_seg,
         sample_preds_synth, sample_preds_seg, sample_names, epoch
     )
-    
+
     return {
         "synthesis_l1": run_synth_l1.avg,
         "synthesis_psnr": run_synth_psnr.avg,

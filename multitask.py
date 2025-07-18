@@ -189,69 +189,82 @@ class MultiTaskLogger:
     
     def _log_multitask_sample(self, input_vol, target_synth, target_seg, 
                                pred_synth, pred_seg, case_name, stage_info):
-        """Log detailed multi-task sample"""
+        """Log detailed multi-task sample with color overlays for multi-class segmentation"""
         try:
             # Squeeze channel dimension if it exists and is 1
             if input_vol.shape[0] == 1:
-                input_vol = input_vol[0] # remove channel if single channel
-            
-            # Ensure target_synth, pred_synth, target_seg, pred_seg are 3D
+                input_vol = input_vol[0]
             target_synth = np.squeeze(target_synth)
             pred_synth = np.squeeze(pred_synth)
             target_seg = np.squeeze(target_seg)
             pred_seg = np.squeeze(pred_seg)
 
             slice_idx = input_vol.shape[-1] // 2
-            
-            # Extract slices
             input1_slice = input_vol[0, :, :, slice_idx]
             input2_slice = input_vol[1, :, :, slice_idx]
             input3_slice = input_vol[2, :, :, slice_idx]
             target_synth_slice = target_synth[:, :, slice_idx]
             pred_synth_slice = pred_synth[:, :, slice_idx]
-            target_seg_slice = target_seg[:, :, slice_idx]
-            pred_seg_slice = pred_seg[:, :, slice_idx]
-            
-            # Create layout: [Input1 | Input2 | Input3 | Target_Synth | Pred_Synth | Target_Seg | Pred_Seg]
-            all_images = [
-                input1_slice, input2_slice, input3_slice,
-                target_synth_slice, pred_synth_slice,
-                target_seg_slice, pred_seg_slice
-            ]
-            
-            # Normalize images (except segmentation masks)
-            normalized_images = []
-            for i, img in enumerate(all_images):
-                if i < 5: # Inputs and synthesis images need normalization
-                    img_norm = (img - img.min()) / (img.max() - img.min() + 1e-8)
-                else: # Segmentation masks are binary, no intensity normalization needed
-                    img_norm = img # Assuming 0 or 1 values for segmentation
-                normalized_images.append(img_norm)
-            
-            # Concatenate
-            comparison = np.concatenate(normalized_images, axis=1)
-            
-            # For logging, segmentation should be grayscale or a specific color to distinguish
-            # Here we make it grayscale for simplicity, similar to other images
-            comparison_rgb = np.stack([comparison] * 3, axis=-1)
-            
-            # Create caption
+
+            # For multi-class: get argmax for mask visualization
+            target_seg_slice = target_seg[:, :, slice_idx] if target_seg.ndim == 3 else np.argmax(target_seg[:, :, :, slice_idx], axis=0)
+            pred_seg_slice = pred_seg[:, :, slice_idx] if pred_seg.ndim == 3 else np.argmax(pred_seg[:, :, :, slice_idx], axis=0)
+
+            # Normalize images (inputs and synth)
+            def norm_img(img):
+                return (img - img.min()) / (img.max() - img.min() + 1e-8)
+            input1_slice = norm_img(input1_slice)
+            input2_slice = norm_img(input2_slice)
+            input3_slice = norm_img(input3_slice)
+            target_synth_slice = norm_img(target_synth_slice)
+            pred_synth_slice = norm_img(pred_synth_slice)
+
+            # Color map for 4 classes (BraTS): background, edema, non-enhancing, enhancing
+            class_colors = np.array([
+                [0, 0, 0],        # 0: background - black
+                [0, 255, 0],      # 1: edema - green
+                [0, 0, 255],      # 2: non-enhancing/core - blue
+                [255, 0, 0],      # 3: enhancing - red
+            ], dtype=np.uint8)
+
+            def colorize_mask(mask):
+                mask = mask.astype(np.int32)
+                rgb = np.zeros((*mask.shape, 3), dtype=np.uint8)
+                for c in range(class_colors.shape[0]):
+                    rgb[mask == c] = class_colors[c]
+                return rgb
+
+            # Colorize segmentation masks
+            target_seg_rgb = colorize_mask(target_seg_slice)
+            pred_seg_rgb = colorize_mask(pred_seg_slice)
+
+            # Stack grayscale images to RGB for layout
+            def gray2rgb(img):
+                img = (img * 255).astype(np.uint8)
+                return np.stack([img]*3, axis=-1)
+
+            layout = np.concatenate([
+                gray2rgb(input1_slice),
+                gray2rgb(input2_slice),
+                gray2rgb(input3_slice),
+                gray2rgb(target_synth_slice),
+                gray2rgb(pred_synth_slice),
+                target_seg_rgb,
+                pred_seg_rgb
+            ], axis=1)
+
             labels = " | ".join([
                 f"{self.input_modalities[0]}", f"{self.input_modalities[1]}", f"{self.input_modalities[2]}",
                 f"{self.target_modality}_GT", f"{self.target_modality}_PRED",
                 "SEG_GT", "SEG_PRED"
             ])
-            
             caption = f"{stage_info} | {case_name} | {labels}"
-            
             wandb.log({
-                f"samples/multitask_{self.target_modality.lower()}": wandb.Image(comparison_rgb, caption=caption),
+                f"samples/multitask_{self.target_modality.lower()}": wandb.Image(layout, caption=caption),
                 f"samples/count": self.samples_logged
             }, step=self.step)
-            
             self.samples_logged += 1
             self.step += 1
-            
         except Exception as e:
             print(f"Error creating multi-task sample: {e}")
     

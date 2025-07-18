@@ -77,19 +77,16 @@ def create_segmentation_overlay(seg_data):
     # Convert to RGB
     seg_colored = np.zeros((*seg_data.shape, 3), dtype=np.uint8)
     
-    # Background: black (only this should be black)
+    # Background: black
     seg_colored[seg_data == 0] = [0, 0, 0]
-    # NCR/NET: bright red
+    # Label 1: bright red
     seg_colored[seg_data == 1] = [255, 0, 0]
-    # Edema: bright green  
+    # Label 2: bright green  
     seg_colored[seg_data == 2] = [0, 255, 0]
-    # Enhancing tumor: bright cyan (more visible than dark blue)
+    # Label 3: bright blue (this is what was showing as yellow!)
+    seg_colored[seg_data == 3] = [0, 100, 255]
+    # Label 4: bright cyan (if present)
     seg_colored[seg_data == 4] = [0, 255, 255]
-    
-    # Handle any unexpected labels (like 3) - make them yellow so we can see them
-    unexpected_labels = ~np.isin(seg_data, [0, 1, 2, 4])
-    if np.any(unexpected_labels):
-        seg_colored[unexpected_labels] = [255, 255, 0]  # Yellow for debugging
     
     return seg_colored
 
@@ -173,7 +170,7 @@ def visualize_case(case_data, slice_range=(70, 85)):
     axes[3].axis('off')
     
     axes[4].imshow(seg_colored)
-    axes[4].set_title('Seg (1=Red, 2=Green, 4=Cyan)', fontsize=14, fontweight='bold')
+    axes[4].set_title('Seg (1=Red, 2=Green, 3=Blue)', fontsize=14, fontweight='bold')
     axes[4].axis('off')
     
     # Simple title

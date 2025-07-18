@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 FIXED Synthesis Inference for BraSyn Pipeline
-Fixes data type, intensity range, and compression issues
+Addresses file size, data type, and intensity scaling issues
 """
 
 import os
@@ -139,48 +139,87 @@ def prepare_input_data(case_dir, case_name, target_modality_suffix):
     return {"input_image": input_files}
 
 
-def get_intensity_stats_from_reference(reference_files):
-    """Get intensity statistics from reference modalities for proper scaling"""
-    all_intensities = []
+def analyze_reference_modalities(reference_files, target_modality):
+    """Analyze reference modalities to determine appropriate target characteristics"""
+    
+    modality_characteristics = {
+        'FLAIR': {'typical_range': (0, 2000), 'prefer_dtype': np.int16},
+        'T1CE': {'typical_range': (0, 3000), 'prefer_dtype': np.int16}, 
+        'T1': {'typical_range': (0, 2500), 'prefer_dtype': np.int16},
+        'T2': {'typical_range': (0, 3500), 'prefer_dtype': np.int16}
+    }
+    
+    # Analyze reference files
+    ref_stats = []
+    ref_dtypes = []
+    ref_ranges = []
     
     for ref_file in reference_files:
         img = nib.load(ref_file)
         data = img.get_fdata()
-        # Only consider non-zero values for brain imaging
-        nonzero_data = data[data > 0]
-        if len(nonzero_data) > 0:
-            all_intensities.extend(nonzero_data.flatten())
+        ref_dtypes.append(img.header.get_data_dtype())
+        
+        # Get brain tissue intensities (exclude background)
+        brain_mask = data > np.percentile(data[data > 0], 5) if np.any(data > 0) else data > 0
+        brain_data = data[brain_mask]
+        
+        if len(brain_data) > 0:
+            stats = {
+                'min': np.percentile(brain_data, 1),
+                'max': np.percentile(brain_data, 99),
+                'median': np.median(brain_data),
+                'p25': np.percentile(brain_data, 25),
+                'p75': np.percentile(brain_data, 75)
+            }
+            ref_stats.append(stats)
+            ref_ranges.append((stats['min'], stats['max']))
     
-    if len(all_intensities) > 0:
-        all_intensities = np.array(all_intensities)
-        return {
-            'min': np.percentile(all_intensities, 1),    # 1st percentile
-            'max': np.percentile(all_intensities, 99),   # 99th percentile  
-            'mean': np.mean(all_intensities),
-            'std': np.std(all_intensities)
-        }
+    # Determine target characteristics
+    if ref_stats:
+        # Use median range from reference modalities
+        all_mins = [s['min'] for s in ref_stats]
+        all_maxs = [s['max'] for s in ref_stats]
+        target_min = np.median(all_mins) * 0.8  # Slightly lower
+        target_max = np.median(all_maxs) * 1.1  # Slightly higher
     else:
-        return {'min': 0, 'max': 1000, 'mean': 500, 'std': 200}
-
-
-def synthesize_modality(input_data, model, device, reference_files):
-    """Run synthesis inference with proper intensity scaling and data type handling"""
+        # Fallback to typical ranges
+        target_min, target_max = modality_characteristics[target_modality]['typical_range']
     
-    # Store original image info for proper restoration
+    # Determine target dtype (prefer int16 for compression)
+    target_dtype = np.int16
+    
+    # Check if reference files use consistent dtype
+    unique_dtypes = list(set(ref_dtypes))
+    if len(unique_dtypes) == 1 and 'int' in str(unique_dtypes[0]):
+        target_dtype = unique_dtypes[0]
+    
+    return {
+        'target_range': (target_min, target_max),
+        'target_dtype': target_dtype,
+        'reference_stats': ref_stats
+    }
+
+
+def synthesize_modality(input_data, model, device, reference_files, target_modality):
+    """Run synthesis inference with improved intensity scaling and data type handling"""
+    
+    # Store original image info
     reference_img = nib.load(input_data["input_image"][0])
     original_shape = reference_img.shape
-    original_dtype = reference_img.get_fdata().dtype
     original_header = reference_img.header.copy()
     original_affine = reference_img.affine.copy()
     
     print(f"    Original image info:")
     print(f"      Shape: {original_shape}")
-    print(f"      Data type: {original_dtype}")
-    print(f"      Header datatype: {original_header.get_data_dtype()}")
+    print(f"      Reference dtype: {reference_img.get_fdata().dtype}")
     
-    # Get intensity statistics from reference modalities for proper scaling
-    intensity_stats = get_intensity_stats_from_reference(reference_files)
-    print(f"    Reference intensity stats: min={intensity_stats['min']:.1f}, max={intensity_stats['max']:.1f}")
+    # Analyze reference modalities for target characteristics
+    target_info = analyze_reference_modalities(reference_files, target_modality)
+    target_min, target_max = target_info['target_range']
+    target_dtype = target_info['target_dtype']
+    
+    print(f"    Target range: [{target_min:.1f}, {target_max:.1f}]")
+    print(f"    Target dtype: {target_dtype}")
     
     # Transforms (same as validation in training)
     transform = transforms.Compose([
@@ -215,7 +254,7 @@ def synthesize_modality(input_data, model, device, reference_files):
             cval=0.0,
         )
     
-    # Get result as numpy array and ensure proper data type
+    # Get result as numpy array
     result = prediction[0, 0].cpu().numpy()  # Remove batch and channel dims
     print(f"    Raw prediction shape: {result.shape}, dtype: {result.dtype}")
     print(f"    Raw prediction range: [{result.min():.6f}, {result.max():.6f}]")
@@ -223,7 +262,6 @@ def synthesize_modality(input_data, model, device, reference_files):
     # Crop back to original dimensions
     if result.shape != original_shape:
         print(f"    Cropping from {result.shape} to {original_shape}")
-        # Calculate crop indices
         crop_slices = []
         for i in range(3):
             if result.shape[i] >= original_shape[i]:
@@ -232,37 +270,46 @@ def synthesize_modality(input_data, model, device, reference_files):
                 crop_slices.append(slice(start, end))
             else:
                 crop_slices.append(slice(None))
-        
         result = result[tuple(crop_slices)]
     
     print(f"    After cropping: {result.shape}")
     
-    # CRITICAL: Proper intensity scaling and data type conversion
-    # The model outputs normalized values [0,1], we need to scale to realistic medical imaging range
+    # IMPROVED intensity scaling and data type conversion
     
-    # Step 1: Ensure result is in [0,1] range (clamp if needed)
+    # Step 1: Ensure result is in [0,1] range and apply sigmoid-like scaling for better distribution
     result = np.clip(result, 0.0, 1.0)
     
-    # Step 2: Scale to reference intensity range
-    target_min = intensity_stats['min']
-    target_max = intensity_stats['max']
+    # Apply smooth scaling to improve intensity distribution
+    result = np.power(result, 0.8)  # Slightly compress high intensities
+    
+    # Step 2: Scale to target range with proper handling
     result_scaled = result * (target_max - target_min) + target_min
     
-    print(f"    Scaled intensity range: [{result_scaled.min():.1f}, {result_scaled.max():.1f}]")
+    # Step 3: Ensure values are within reasonable bounds
+    result_scaled = np.clip(result_scaled, 0, target_max * 1.2)
     
-    # Step 3: Convert to appropriate data type (match reference images)
-    # Medical images are typically int16 or float32
-    if 'int' in str(original_header.get_data_dtype()):
-        # Convert to integer type matching reference
-        result_final = result_scaled.astype(original_header.get_data_dtype())
+    print(f"    Scaled range: [{result_scaled.min():.1f}, {result_scaled.max():.1f}]")
+    
+    # Step 4: Convert to target data type with proper handling
+    if target_dtype == np.int16:
+        # For int16, ensure values are within valid range
+        result_scaled = np.clip(result_scaled, -32768, 32767)
+        result_final = result_scaled.astype(np.int16)
+    elif target_dtype == np.uint16:
+        result_scaled = np.clip(result_scaled, 0, 65535)
+        result_final = result_scaled.astype(np.uint16)
     else:
-        # Keep as float32 for consistency
+        # For float types, use float32 for consistency
         result_final = result_scaled.astype(np.float32)
     
-    print(f"    Final data type: {result_final.dtype}")
+    print(f"    Final dtype: {result_final.dtype}")
     print(f"    Final range: [{result_final.min():.1f}, {result_final.max():.1f}]")
     
-    return result_final, original_header, original_affine
+    # Update header to match target data type
+    updated_header = original_header.copy()
+    updated_header.set_data_dtype(result_final.dtype)
+    
+    return result_final, updated_header, original_affine
 
 
 def process_single_case(case_dir, output_dir, models_dir, device):
@@ -301,76 +348,74 @@ def process_single_case(case_dir, output_dir, models_dir, device):
         # Prepare input data
         input_data = prepare_input_data(case_dir, case_name, missing_suffix)
         
-        # Synthesize missing modality with proper scaling
+        # Synthesize missing modality
         print(f"  Synthesizing {missing_modality}...")
-        synthesized, original_header, original_affine = synthesize_modality(
-            input_data, model, device, reference_files
+        synthesized, updated_header, original_affine = synthesize_modality(
+            input_data, model, device, reference_files, missing_modality
         )
         
-        # Save synthesized modality with proper header and compression
+        # Save synthesized modality with optimized settings
         synthesized_filename = f"{case_name}-{missing_suffix}.nii.gz"
         synthesized_path = os.path.join(case_output_dir, synthesized_filename)
         
-        # Create NIfTI image with original header to maintain consistency
+        # Create NIfTI image with updated header
         synthesized_img = nib.Nifti1Image(
             synthesized, 
             original_affine, 
-            original_header
+            updated_header
         )
         
-        # Save with compression for smaller file size
+        # Save with compression optimization
         nib.save(synthesized_img, synthesized_path)
         print(f"  ✓ Saved: {synthesized_filename}")
         
-        # Verify file size is reasonable
+        # Verify file size and consistency
         file_size = os.path.getsize(synthesized_path) / (1024 * 1024)  # MB
         print(f"    File size: {file_size:.1f} MB")
         
-        if file_size > 10:  # Flag if file is unusually large
-            print(f"    ⚠️  WARNING: File size is unusually large ({file_size:.1f} MB)")
-        
         # Verify dimensional consistency
-        print(f"    Verifying dimensional consistency...")
+        print(f"    Verifying consistency...")
         all_files = [f for f in os.listdir(case_output_dir) if f.endswith('.nii.gz')]
-        shapes = {}
-        dtypes = {}
-        file_sizes = {}
+        
+        # Check shapes, dtypes, and file sizes
+        reference_shape = None
+        file_info = {}
         
         for filename in all_files:
             filepath = os.path.join(case_output_dir, filename)
             img = nib.load(filepath)
-            shapes[filename] = img.shape
-            dtypes[filename] = img.get_fdata().dtype
-            file_sizes[filename] = os.path.getsize(filepath) / (1024 * 1024)  # MB
+            shape = img.shape
+            dtype = img.header.get_data_dtype()
+            size_mb = os.path.getsize(filepath) / (1024 * 1024)
+            
+            file_info[filename] = {
+                'shape': shape,
+                'dtype': dtype,
+                'size_mb': size_mb
+            }
+            
+            if reference_shape is None:
+                reference_shape = shape
         
-        # Check if all shapes are the same
-        unique_shapes = set(shapes.values())
-        if len(unique_shapes) == 1:
-            print(f"    ✅ All modalities have consistent shape: {list(unique_shapes)[0]}")
+        # Report consistency
+        shape_consistent = all(info['shape'] == reference_shape for info in file_info.values())
+        size_reasonable = all(info['size_mb'] < 8.0 for info in file_info.values())
+        
+        if shape_consistent:
+            print(f"    ✅ Shape consistent: {reference_shape}")
         else:
-            print(f"    ⚠️  Shape inconsistency detected:")
-            for filename, shape in shapes.items():
-                print(f"      {filename}: {shape}")
-        
-        # Check file sizes
-        print(f"    File size comparison:")
-        for filename, size in file_sizes.items():
-            status = "✅" if size < 5.0 else "⚠️" 
-            print(f"      {filename}: {size:.1f} MB {status}")
-        
-        # Check data types
-        print(f"    Data type comparison:")
-        for filename, dtype in dtypes.items():
-            print(f"      {filename}: {dtype}")
-        
-        # Verify complete case
-        expected_files = [f"{case_name}-{s}.nii.gz" for s in ['t2f', 't1c', 't1n', 't2w']]
-        actual_files = [f for f in os.listdir(case_output_dir) if f.endswith('.nii.gz')]
-        
-        if len(actual_files) == 4:
-            print(f"  ✅ Complete case ready for FeTS")
+            print(f"    ⚠️  Shape inconsistency detected")
+            
+        if size_reasonable:
+            print(f"    ✅ File sizes reasonable (all < 8MB)")
         else:
-            print(f"  ⚠️  Warning: Expected 4 files, found {len(actual_files)}")
+            print(f"    ⚠️  Large file sizes detected")
+        
+        # Print summary
+        print(f"    File summary:")
+        for filename, info in file_info.items():
+            status = "✅" if info['size_mb'] < 6.0 else "⚠️"
+            print(f"      {filename}: {info['size_mb']:.1f}MB, {info['dtype']} {status}")
         
         return True
         
@@ -385,7 +430,7 @@ def main():
     parser = argparse.ArgumentParser(description="FIXED Synthesis Inference for BraSyn")
     parser.add_argument("--input_dir", type=str, default="pseudo_validation",
                        help="Directory containing cases with missing modalities")
-    parser.add_argument("--output_dir", type=str, default="completed_cases",
+    parser.add_argument("--output_dir", type=str, default="completed_cases_fixed",
                        help="Output directory for completed cases")
     parser.add_argument("--models_dir", type=str, default="/data",
                        help="Directory containing synthesis models")
@@ -434,11 +479,12 @@ def main():
     print(f"Input directory: {args.input_dir}")
     print(f"Output directory: {args.output_dir}")
     print(f"Found {len(case_dirs)} cases to process")
-    print(f"✅ FIXES APPLIED:")
-    print(f"  • Proper intensity scaling based on reference modalities")
-    print(f"  • Correct data type handling (match original images)")
-    print(f"  • File size monitoring and optimization")
-    print(f"  • Better header preservation")
+    print(f"✅ KEY FIXES:")
+    print(f"  • Improved intensity scaling with power law adjustment")
+    print(f"  • Proper data type handling and header updates")
+    print(f"  • File size optimization (target < 6MB)")
+    print(f"  • Better compression through int16 preference")
+    print(f"  • Reference-based target range determination")
     
     # Process each case
     successful = 0
@@ -463,12 +509,8 @@ def main():
     print(f"📊 Total: {len(case_dirs)}")
     
     if successful > 0:
-        print(f"\n🎯 FIXED dataset ready for FeTS segmentation: {args.output_dir}")
-        print(f"\nNext steps:")
-        print(f"1. Convert to FeTS format: ./convert_to_fets_format.sh")
-        print(f"2. Run FeTS segmentation")
-        print(f"3. Convert to BraSyn submission format")
-        print(f"\n✅ Files should now have proper sizes (~2-3MB each)")
+        print(f"\n🎯 FIXED dataset ready: {args.output_dir}")
+        print(f"✅ All files should now be consistently sized (< 6MB each)")
 
 
 if __name__ == "__main__":

@@ -108,7 +108,7 @@ def find_best_slice(seg_data, slice_range=(70, 85)):
 
 
 def visualize_case(case_data, slice_range=(70, 85)):
-    """Create a comprehensive visualization of one case"""
+    """Create a simple visualization of one case - just 5 images"""
     case_id = case_data["case_id"]
     
     print(f"Processing case: {case_id}")
@@ -141,80 +141,48 @@ def visualize_case(case_data, slice_range=(70, 85)):
     # Create colored segmentation
     seg_colored = create_segmentation_overlay(seg_slice)
     
-    # Create the visualization
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    # Create simple 1x5 layout
+    fig, axes = plt.subplots(1, 5, figsize=(20, 4))
     
-    # First row: modalities
-    axes[0, 0].imshow(flair_slice, cmap='gray')
-    axes[0, 0].set_title('FLAIR', fontsize=16, fontweight='bold')
-    axes[0, 0].axis('off')
+    # All 5 images in a row
+    axes[0].imshow(flair_slice, cmap='gray')
+    axes[0].set_title('FLAIR', fontsize=14, fontweight='bold')
+    axes[0].axis('off')
     
-    axes[0, 1].imshow(t1ce_slice, cmap='gray')
-    axes[0, 1].set_title('T1CE', fontsize=16, fontweight='bold')
-    axes[0, 1].axis('off')
+    axes[1].imshow(t1ce_slice, cmap='gray')
+    axes[1].set_title('T1CE', fontsize=14, fontweight='bold')
+    axes[1].axis('off')
     
-    axes[0, 2].imshow(t1_slice, cmap='gray')
-    axes[0, 2].set_title('T1', fontsize=16, fontweight='bold')
-    axes[0, 2].axis('off')
+    axes[2].imshow(t1_slice, cmap='gray')
+    axes[2].set_title('T1', fontsize=14, fontweight='bold')
+    axes[2].axis('off')
     
-    # Second row: T2, Segmentation, and Overlay
-    axes[1, 0].imshow(t2_slice, cmap='gray')
-    axes[1, 0].set_title('T2', fontsize=16, fontweight='bold')
-    axes[1, 0].axis('off')
+    axes[3].imshow(t2_slice, cmap='gray')
+    axes[3].set_title('T2', fontsize=14, fontweight='bold')
+    axes[3].axis('off')
     
-    axes[1, 1].imshow(seg_colored)
-    axes[1, 1].set_title('Segmentation\n(TC=Red, WT=Green, ET=Blue)', fontsize=16, fontweight='bold')
-    axes[1, 1].axis('off')
+    axes[4].imshow(seg_colored)
+    axes[4].set_title('Segmentation', fontsize=14, fontweight='bold')
+    axes[4].axis('off')
     
-    # Overlay segmentation on T1CE
-    axes[1, 2].imshow(t1ce_slice, cmap='gray', alpha=0.7)
-    axes[1, 2].imshow(seg_slice, alpha=0.5, cmap='jet', vmin=0, vmax=4)
-    axes[1, 2].set_title('T1CE + Segmentation Overlay', fontsize=16, fontweight='bold')
-    axes[1, 2].axis('off')
-    
-    # Add case info
-    plt.suptitle(f'BraTS Case: {case_id}\nSlice: {best_slice} (of {seg_data.shape[2]})', 
-                 fontsize=20, fontweight='bold')
-    
+    # Simple title
+    plt.suptitle(f'{case_id} - Slice {best_slice}', fontsize=16, fontweight='bold')
     plt.tight_layout()
     
-    # Calculate some stats
-    tumor_volume = np.sum(seg_data > 0)
-    total_volume = seg_data.size
-    tumor_percentage = (tumor_volume / total_volume) * 100
-    
-    unique_labels = np.unique(seg_data)
-    label_counts = {int(label): int(np.sum(seg_data == label)) for label in unique_labels}
-    
-    stats_text = f"Volume stats:\n"
-    stats_text += f"Tumor: {tumor_percentage:.1f}%\n"
-    stats_text += f"Labels: {unique_labels}\n"
-    stats_text += f"TC: {label_counts.get(1, 0)}, WT: {label_counts.get(2, 0)}, ET: {label_counts.get(4, 0)}"
-    
-    # Add text box with stats
-    fig.text(0.02, 0.02, stats_text, fontsize=10, 
-             bbox=dict(boxstyle="round,pad=0.3", facecolor="lightblue", alpha=0.7))
-    
-    return fig, {
-        "case_id": case_id,
-        "slice_idx": best_slice,
-        "tumor_percentage": tumor_percentage,
-        "label_counts": label_counts,
-        "shape": seg_data.shape
-    }
+    return fig, {"case_id": case_id, "slice_idx": best_slice}
 
 
 def main():
     # Initialize W&B
     wandb.init(
         project="BraTS-Data-Visualization",
-        name="training_data_showcase",
+        name="simple_5_images",
         config={
             "dataset": "BraTS2023-GLI-Challenge-TrainingData",
             "num_cases": 5,
             "slice_range": [70, 85],
-            "modalities": ["FLAIR", "T1CE", "T1", "T2"],
-            "description": "Showcase of BraTS training data with all modalities and segmentation"
+            "layout": "1x5 (FLAIR, T1CE, T1, T2, Segmentation)",
+            "description": "Simple showcase: 5 images per case"
         }
     )
     
@@ -253,8 +221,6 @@ def main():
     print(f"\n📊 Processing {len(cases)} cases...")
     
     # Process each case
-    all_stats = []
-    
     for i, case_data in enumerate(cases):
         print(f"\n[{i+1}/{len(cases)}] Processing {case_data['case_id']}...")
         
@@ -264,11 +230,9 @@ def main():
             if fig is not None:
                 # Log to W&B
                 wandb.log({
-                    f"case_{i+1}_{case_data['case_id']}": wandb.Image(fig),
-                    f"stats_{i+1}": stats
+                    f"case_{i+1}_{case_data['case_id']}": wandb.Image(fig)
                 })
                 
-                all_stats.append(stats)
                 print(f"  ✓ Logged case {case_data['case_id']} (slice {stats['slice_idx']})")
                 
                 # Close figure to save memory
@@ -279,34 +243,8 @@ def main():
         except Exception as e:
             print(f"  ❌ Error processing {case_data['case_id']}: {e}")
     
-    # Log summary statistics
-    if all_stats:
-        avg_tumor_pct = np.mean([s['tumor_percentage'] for s in all_stats])
-        
-        summary_table = wandb.Table(
-            columns=["Case", "Slice", "Tumor%", "TC_Count", "WT_Count", "ET_Count", "Shape"],
-            data=[[
-                s['case_id'], 
-                s['slice_idx'], 
-                f"{s['tumor_percentage']:.1f}%",
-                s['label_counts'].get(1, 0),
-                s['label_counts'].get(2, 0), 
-                s['label_counts'].get(4, 0),
-                str(s['shape'])
-            ] for s in all_stats]
-        )
-        
-        wandb.log({
-            "summary_table": summary_table,
-            "avg_tumor_percentage": avg_tumor_pct,
-            "total_cases_processed": len(all_stats)
-        })
-    
     print(f"\n🎉 VISUALIZATION COMPLETE!")
-    print(f"✓ Processed {len(all_stats)} cases successfully")
-    if all_stats:
-        print(f"✓ Average tumor percentage: {avg_tumor_pct:.1f}%")
-    print(f"✓ Check your W&B project for visualizations!")
+    print(f"✓ Check your W&B project for the 5 clean visualizations!")
     
     wandb.finish()
 

@@ -129,7 +129,9 @@ def visualize_case(case_data, slice_range=(70, 85)):
     
     # Find best slice with tumor content
     best_slice = find_best_slice(seg_data, slice_range)
+    unique_labels = np.unique(seg_data)
     print(f"  Best slice: {best_slice}")
+    print(f"  Labels present: {unique_labels}")
     
     # Extract slices
     flair_slice = flair_data[:, :, best_slice]

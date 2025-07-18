@@ -219,13 +219,23 @@ class MultiTaskLogger:
             target_synth_slice = norm_img(target_synth_slice)
             pred_synth_slice = norm_img(pred_synth_slice)
 
-            # Color map for 4 classes (BraTS): background, edema, non-enhancing, enhancing
-            class_colors = np.array([
-                [0, 0, 0],        # 0: background - black
-                [0, 255, 0],      # 1: edema - green
-                [0, 0, 255],      # 2: non-enhancing/core - blue
-                [255, 0, 0],      # 3: enhancing - red
-            ], dtype=np.uint8)
+
+            # Color map for BraTS classes to match seg.py:
+            # 0: background (black), 1: TC (red), 2: ED (green), 4: ET (blue)
+            # Note: In seg.py, the visualization uses 1=TC (red), 2=ED (green), 4=ET (blue)
+            # We'll use the same mapping for consistency
+            class_colors = np.zeros((5, 3), dtype=np.uint8)
+            class_colors[0] = [0, 0, 0]       # 0: background - black
+            class_colors[1] = [255, 0, 0]     # 1: TC - red
+            class_colors[2] = [0, 255, 0]     # 2: ED - green
+            class_colors[4] = [0, 0, 255]     # 4: ET - blue
+
+            def colorize_mask(mask):
+                mask = mask.astype(np.int32)
+                rgb = np.zeros((*mask.shape, 3), dtype=np.uint8)
+                for c in [0, 1, 2, 4]:
+                    rgb[mask == c] = class_colors[c]
+                return rgb
 
             def colorize_mask(mask):
                 mask = mask.astype(np.int32)

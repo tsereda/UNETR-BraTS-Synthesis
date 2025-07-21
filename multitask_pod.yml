@@ -18,8 +18,15 @@ spec:
             values:
             - NVIDIA-A10
             - NVIDIA-GeForce-RTX-3090
-            - NVIDIA-L40
+            - NVIDIA-GeForce-RTX-4090
+            - NVIDIA-TITAN-RTX
+            - NVIDIA-RTX-A5000
+            - Quadro-RTX-6000
+            - Tesla-V100-SXM2-32GB
             - NVIDIA-A40
+            - NVIDIA-L40
+            - NVIDIA-RTX-A6000
+            - Quadro-RTX-8000
   
   containers:
     - name: brats-processing
@@ -32,7 +39,6 @@ spec:
           value: /app/UNETR-BraTS-Synthesis
         - name: CUDA_VISIBLE_DEVICES
           value: "0"
-        # nnUNet paths
         - name: nnUNet_raw
           value: /app/nnunet/raw
         - name: nnUNet_preprocessed
@@ -43,18 +49,17 @@ spec:
           value: "1"
         - name: PYTHONIOENCODING
           value: "UTF-8"
-        # W&B configuration
         - name: WANDB_API_KEY
           valueFrom:
             secretKeyRef:
               name: wandb-credentials-edu
-              key: api-key  # Adjust this key name to match your secret
+              key: api-key
         - name: WANDB_PROJECT
           value: "UNETR-BraTS-SegFinetuneToSynth"
         - name: WANDB_ENTITY
-          value: "timgsereda"  # Replace with your W&B username/team
+          value: "timgsereda"
         - name: WANDB_MODE
-          value: "online"  # Change to "offline" if needed
+          value: "online"
         - name: SYNAPSE_AUTHTOKEN
           valueFrom:
             secretKeyRef:
